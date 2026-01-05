@@ -1,0 +1,6 @@
+tree-sitter>=0.21.0
+tree-sitter-c>=0.21.0
+tree-sitter-cpp>=0.21.0
+orjson
+ujson
+psutil
