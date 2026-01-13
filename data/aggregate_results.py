@@ -28,9 +28,35 @@ def parse_codeql(file_path):
     results = []
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
+            # 如果文件为空，直接返回空列表
+            if os.fstat(f.fileno()).st_size == 0:
+                print(f"警告: 文件为空 {file_path}")
+                return results
             data = json.load(f)
+        
         for run in data.get('runs', []):
+            # 创建 ruleId 到 CWE 的映射
+            rule_to_cwe = {}
+            
+            # 预先填充所有规则的CWE信息
+            if 'tool' in run and 'driver' in run['tool'] and 'rules' in run['tool']['driver']:
+                for rule in run['tool']['driver']['rules']:
+                    rule_id = rule.get('id')
+                    cwe_tags = []
+                    # 提取CWE信息
+                    if 'properties' in rule and 'tags' in rule['properties']:
+                        for tag in rule['properties']['tags']:
+                            if tag.startswith('external/cwe/'):
+                                cwe_id = tag.split('/')[-1].replace('cwe-', 'CWE-')
+                                cwe_tags.append(cwe_id)
+                    
+                    if rule_id and cwe_tags:
+                        rule_to_cwe[rule_id] = list(set(cwe_tags))
+
             for result in run.get('results', []):
+                rule_id = result.get('ruleId')
+                cwe = rule_to_cwe.get(rule_id, []) # 直接从预填充的映射中获取
+
                 for location in result.get('locations', []):
                     physical_location = location.get('physicalLocation')
                     if physical_location:
@@ -40,6 +66,7 @@ def parse_codeql(file_path):
                             results.append({
                                 'file': artifact_location.get('uri'),
                                 'line': region.get('startLine'),
+                                'cwe': cwe if cwe else None,
                             })
     except json.JSONDecodeError as e:
         print(f"警告: 解析JSON文件失败 {file_path}: {e}")
@@ -54,15 +81,43 @@ def parse_semgrep(file_path):
         with open(file_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
         for result in data.get('results', []):
+            cwe_info = result.get('extra', {}).get('metadata', {}).get('cwe')
+            cwe_list = []
+            if cwe_info:
+                if isinstance(cwe_info, list):
+                    # e.g., ["CWE-476: NULL_POINTER_DEREFERENCE"]
+                    for item in cwe_info:
+                        match = re.match(r'CWE-\d+', item)
+                        if match:
+                            cwe_list.append(match.group(0))
+                elif isinstance(cwe_info, str):
+                    # e.g., "CWE-476"
+                    match = re.match(r'CWE-\d+', cwe_info)
+                    if match:
+                        cwe_list.append(match.group(0))
+            
             results.append({
                 'file': result.get('path'),
                 'line': result.get('start', {}).get('line'),
+                'cwe': cwe_list if cwe_list else None,
             })
     except json.JSONDecodeError as e:
         print(f"警告: 解析JSON文件失败 {file_path}: {e}")
     except Exception as e:
         print(f"警告: 处理 semgrep 文件时出错 {file_path}: {e}")
     return results
+
+# CSA Bug Type 到 CWE 的映射
+CSA_BUG_TYPE_TO_CWE = {
+    'Dereference of null pointer': 'CWE-476',
+    'Dead assignment': 'CWE-563',
+    'Use of memory after it is freed': 'CWE-416',
+    'Memory leak': 'CWE-401',
+    'Division by zero': 'CWE-369',
+    'Uninitialized value': 'CWE-457',
+    'Potential leak of memory': 'CWE-401',
+    # 可以根据需要添加更多映射
+}
 
 def parse_csa(file_path):
     """解析 csa (scan-build) 的 HTML 报告"""
@@ -82,16 +137,21 @@ def parse_csa(file_path):
         for row in rows:
             cols = row.find_all('td')
             if len(cols) > 4:
+                bug_type_cell = cols[1]
                 file_cell = cols[2]
                 line_cell = cols[4]
                 
+                bug_type_text = bug_type_cell.get_text(strip=True)
                 file_path_text = file_cell.get_text(strip=True)
                 line_number_text = line_cell.get_text(strip=True)
+
+                cwe = CSA_BUG_TYPE_TO_CWE.get(bug_type_text)
 
                 if file_path_text and line_number_text.isdigit():
                     results.append({
                         'file': file_path_text,
                         'line': int(line_number_text),
+                        'cwe': [cwe] if cwe else None,
                     })
 
     except Exception as e:
@@ -246,6 +306,7 @@ def main():
                                     'project_version': version,
                                     'file_path': relative_path,
                                     'line_number': finding['line'],
+                                    'cwe': finding.get('cwe'),
                                 })
             else:
                 for filename in os.listdir(project_path):
@@ -307,6 +368,7 @@ def main():
                                 'project_version': version,
                                 'file_path': relative_path,
                                 'line_number': finding['line'],
+                                'cwe': finding.get('cwe'),
                             })
 
     output_path = os.path.join(base_dir, 'results.json')
