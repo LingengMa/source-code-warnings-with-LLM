@@ -55,6 +55,8 @@ def parse_codeql(file_path):
 
             for result in run.get('results', []):
                 rule_id = result.get('ruleId')
+                message = result.get('message', {}).get('text')
+                level = result.get('level')
                 cwe = rule_to_cwe.get(rule_id, []) # 直接从预填充的映射中获取
 
                 for location in result.get('locations', []):
@@ -67,6 +69,9 @@ def parse_codeql(file_path):
                                 'file': artifact_location.get('uri'),
                                 'line': region.get('startLine'),
                                 'cwe': cwe if cwe else None,
+                                'rule_id': rule_id,
+                                'message': message,
+                                'severity': level,
                             })
     except json.JSONDecodeError as e:
         print(f"警告: 解析JSON文件失败 {file_path}: {e}")
@@ -81,7 +86,9 @@ def parse_semgrep(file_path):
         with open(file_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
         for result in data.get('results', []):
-            cwe_info = result.get('extra', {}).get('metadata', {}).get('cwe')
+            extra = result.get('extra', {})
+            metadata = extra.get('metadata', {})
+            cwe_info = metadata.get('cwe')
             cwe_list = []
             if cwe_info:
                 if isinstance(cwe_info, list):
@@ -100,6 +107,9 @@ def parse_semgrep(file_path):
                 'file': result.get('path'),
                 'line': result.get('start', {}).get('line'),
                 'cwe': cwe_list if cwe_list else None,
+                'rule_id': result.get('check_id'),
+                'message': extra.get('message'),
+                'severity': extra.get('severity'),
             })
     except json.JSONDecodeError as e:
         print(f"警告: 解析JSON文件失败 {file_path}: {e}")
@@ -140,10 +150,12 @@ def parse_csa(file_path):
                 bug_type_cell = cols[1]
                 file_cell = cols[2]
                 line_cell = cols[4]
+                category_cell = cols[0]
                 
                 bug_type_text = bug_type_cell.get_text(strip=True)
                 file_path_text = file_cell.get_text(strip=True)
                 line_number_text = line_cell.get_text(strip=True)
+                category_text = category_cell.get_text(strip=True)
 
                 cwe = CSA_BUG_TYPE_TO_CWE.get(bug_type_text)
 
@@ -152,6 +164,9 @@ def parse_csa(file_path):
                         'file': file_path_text,
                         'line': int(line_number_text),
                         'cwe': [cwe] if cwe else None,
+                        'rule_id': bug_type_text,
+                        'message': f"{category_text}: {bug_type_text}",
+                        'severity': 'Warning', # CSA不提供严重等级，设为默认值
                     })
 
     except Exception as e:
@@ -307,6 +322,9 @@ def main():
                                     'file_path': relative_path,
                                     'line_number': finding['line'],
                                     'cwe': finding.get('cwe'),
+                                    'rule_id': finding.get('rule_id'),
+                                    'message': finding.get('message'),
+                                    'severity': finding.get('severity'),
                                 })
             else:
                 for filename in os.listdir(project_path):
@@ -369,6 +387,9 @@ def main():
                                 'file_path': relative_path,
                                 'line_number': finding['line'],
                                 'cwe': finding.get('cwe'),
+                                'rule_id': finding.get('rule_id'),
+                                'message': finding.get('message'),
+                                'severity': finding.get('severity'),
                             })
 
     output_path = os.path.join(base_dir, 'results.json')
