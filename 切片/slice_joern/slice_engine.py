@@ -159,6 +159,7 @@ class SliceEngine:
 
         # 元数据
         metadata = {
+            "original_data": {}, # Placeholder for original data
             "function_name": self.pdg.method_name,
             "function_start_line": self.pdg.start_line,
             "function_end_line": self.pdg.end_line,

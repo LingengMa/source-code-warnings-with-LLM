@@ -33,6 +33,10 @@ DDG_LABEL = "DDG"  # 数据依赖边
 CDG_LABEL = "CDG"  # 控制依赖边
 CFG_LABEL = "CFG"  # 控制流边
 
+# 注释标记
+SLICE_LINE_COMMENT = " // SLICED_LINE"
+CRITERION_LINE_COMMENT = " // CRITERION_LINE"
+
 # 占位符
 PLACEHOLDER = "    /* PLACEHOLDER: Code omitted for brevity */"
 
@@ -44,3 +48,12 @@ TREE_SITTER_SO_FILE = "build/c.so"
 
 # Slicing
 FORWARD_SLICE = True
+
+# Slicing criterion
+CRITERION = "func"  # "func" or "line"
+
+# Chunk processing
+CHUNK_SIZE = 1000  # Number of items to process in each chunk
+PROCESSED_LOG = os.path.join(BASE_DIR, "slice_output", "processed_log.txt")
+MERGED_SLICES_FILE = os.path.join(BASE_DIR, "slice_output", "slices.json")
+CLEANUP_CHUNKS = True # Set to False to keep intermediate chunk files

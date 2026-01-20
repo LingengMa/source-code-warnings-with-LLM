@@ -229,53 +229,41 @@ class AstRestorer:
         # tree-sitter 的行号是 0-indexed, Joern 是 1-indexed
         return node.start_point[0] + 1, node.end_point[0] + 1
 
-    def restore_code(self, slice_nodes: Set[PDGNode]) -> str:
+    def restore_code(self, slice_nodes: Set[PDGNode], criterion_line: int) -> str:
         """
-        将切片节点恢复为语法正确的代码块。
+        将切片节点恢复为语法正确的代码块，并为切片行添加注释。
+        确保代码行按原始顺序排列，且不重复。
+
+        Args:
+            slice_nodes: 切片引擎返回的节点集合。
+            criterion_line: 切片准则的行号。
+
+        Returns:
+            带有注释的、恢复的代码字符串。
         """
         slice_line_numbers = {node.line_number for node in slice_nodes if node.line_number is not None}
         if not slice_line_numbers:
             return ""
 
-        # 1. 找到所有完全包含在切片行号内的 AST 节点
-        candidate_ast_nodes = []
-        
-        def find_candidate_nodes(node):
-            start_line, end_line = self._get_node_line_range(node)
-            
-            # 检查节点的每一行是否都在切片行号集合中
-            is_fully_contained = all(
-                line in slice_line_numbers for line in range(start_line, end_line + 1)
-            )
+        restored_lines = []
+        # 遍历源文件的每一行，以保证顺序
+        for i, line_content in enumerate(self.source_lines):
+            current_line_num = i + 1
+            if current_line_num in slice_line_numbers:
+                line_to_add = line_content.rstrip()
+                if current_line_num == criterion_line:
+                    # 这是切片准则行，添加注释
+                    line_to_add += config.CRITERION_LINE_COMMENT
+                # 对于其他切片行，不再添加 SLICE_LINE_COMMENT
+                restored_lines.append(line_to_add)
 
-            if is_fully_contained:
-                candidate_ast_nodes.append(node)
-            else:
-                # 如果当前节点不完全包含，则递归其子节点
-                for child in node.children:
-                    find_candidate_nodes(child)
+        # 记录最终用于恢复代码的 PDG 节点
+        self.ast_closure_nodes = {
+            node.node_id for node in self.pdg.nodes.values()
+            if node.line_number in slice_line_numbers
+        }
 
-        find_candidate_nodes(self.tree.root_node)
-
-        # 2. 筛选出最高层级的节点
-        top_level_nodes = []
-        candidate_set = set(candidate_ast_nodes)
-        for node in candidate_ast_nodes:
-            if not any(parent in candidate_set for parent in self._get_ancestors(node)):
-                top_level_nodes.append(node)
-        
-        # 按在源代码中的出现顺序排序
-        top_level_nodes.sort(key=lambda n: n.start_byte)
-
-        # 3. 提取源码并拼接
-        code_blocks = []
-        for node in top_level_nodes:
-            code_blocks.append(node.text.decode('utf-8'))
-        
-        # 记录用于恢复的最终节点集合 (用于元数据)
-        self._record_final_ast_nodes(top_level_nodes)
-
-        return "\n".join(code_blocks)
+        return "\n".join(restored_lines)
 
     def _get_ancestors(self, node):
         """获取一个节点的所有祖先节点"""
@@ -423,7 +411,7 @@ class SingleFileSlicer:
             
             # 7. 使用 AST Restorer 恢复代码
             restorer = AstRestorer(pdg, code_lines)
-            sliced_code = restorer.restore_code(slice_nodes)
+            sliced_code = restorer.restore_code(slice_nodes, target_line)
             
             # 8. 提取切片行号（用于元数据）
             final_node_ids = restorer.ast_closure_nodes
@@ -433,7 +421,11 @@ class SingleFileSlicer:
             result["status"] = "success"
             result["sliced_code"] = sliced_code
             result["slice_lines"] = sorted(list(slice_lines))
+            
+            # 将原始任务数据和新的元数据合并
+            metadata["original_data"] = task
             result["metadata"] = metadata
+            
             # 更新元数据
             metadata["total_slice_lines"] = len(slice_lines)
             metadata["final_node_count"] = len(final_node_ids)
@@ -463,53 +455,121 @@ class SingleFileSlicer:
         
         return result
     
-    def slice_all(self) -> List[Dict]:
-        """对所有任务执行切片"""
-        results = []
+    def _load_processed_chunks(self) -> Set[int]:
+        """加载已处理的 chunk 索引"""
+        processed = set()
+        if os.path.exists(config.PROCESSED_LOG):
+            with open(config.PROCESSED_LOG, 'r') as f:
+                for line in f:
+                    try:
+                        processed.add(int(line.strip()))
+                    except ValueError:
+                        pass
+        return processed
+
+    def _log_processed_chunk(self, chunk_index: int):
+        """记录已处理的 chunk"""
+        with open(config.PROCESSED_LOG, 'a') as f:
+            f.write(f"{chunk_index}\n")
+
+    def slice_all(self):
+        """对所有任务执行分块切片"""
+        tasks = self.tasks
+        total_tasks = len(tasks)
+        chunk_size = config.CHUNK_SIZE
         
-        logging.info(f"\nStarting batch slicing for {len(self.tasks)} tasks...")
+        processed_chunks = self._load_processed_chunks()
+        logging.info(f"Found {len(processed_chunks)} already processed chunks.")
+
+        for i in range(0, total_tasks, chunk_size):
+            chunk_index = i // chunk_size
+            if chunk_index in processed_chunks:
+                logging.info(f"Skipping chunk {chunk_index} (tasks {i} to {i + chunk_size - 1}) as it's already processed.")
+                continue
+
+            chunk_tasks = tasks[i:i + chunk_size]
+            chunk_results = []
+            
+            logging.info(f"\nStarting chunk {chunk_index} (tasks {i} to {i + len(chunk_tasks) - 1})")
+
+            for j, task in enumerate(chunk_tasks, 1):
+                logging.info(f"\n[Chunk {chunk_index} | Task {j}/{len(chunk_tasks)} | Total {i+j}/{total_tasks}]")
+                result = self.slice_one(task)
+                chunk_results.append(result)
+
+            # 保存当前 chunk 的结果
+            self.save_chunk_results(chunk_results, chunk_index)
+            self._log_processed_chunk(chunk_index)
+
+        logging.info("\nAll chunks processed.")
+
+    def save_chunk_results(self, results: List[Dict], chunk_index: int):
+        """保存单个 chunk 的结果"""
+        os.makedirs(config.OUTPUT_DIR, exist_ok=True)
+        chunk_filename = os.path.join(config.OUTPUT_DIR, f"slices_chunk_{chunk_index}.json")
+        logging.info(f"Saving chunk {chunk_index} results to {chunk_filename}")
+        with open(chunk_filename, 'w', encoding='utf-8') as f:
+            json.dump(results, f, indent=2, ensure_ascii=False)
+        logging.info(f"✓ Chunk {chunk_index} results saved.")
+
+    def merge_chunks(self):
+        """合并所有 chunk 的结果"""
+        logging.info("\nMerging all chunk results...")
+        all_results = []
+        output_dir = config.OUTPUT_DIR
         
-        for i, task in enumerate(self.tasks, 1):
-            logging.info(f"\n[{i}/{len(self.tasks)}]")
-            result = self.slice_one(task)
-            results.append(result)
+        chunk_files = [f for f in os.listdir(output_dir) if f.startswith('slices_chunk_') and f.endswith('.json')]
+        # 按数字顺序排序
+        chunk_files.sort(key=lambda x: int(x.split('_')[-1].split('.')[0]))
+
+        for filename in chunk_files:
+            filepath = os.path.join(output_dir, filename)
+            try:
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    all_results.extend(data)
+                logging.info(f"Loaded {len(data)} results from {filename}")
+            except (json.JSONDecodeError, IOError) as e:
+                logging.error(f"Failed to load or parse {filename}: {e}")
+
+        self.save_results(all_results)
         
-        # 统计
-        success = sum(1 for r in results if r['status'] == 'success')
-        failed = len(results) - success
-        
-        logging.info(f"\n{'='*60}")
-        logging.info(f"Batch slicing completed!")
-        logging.info(f"  Total: {len(results)}")
-        logging.info(f"  Success: {success} ({success/len(results)*100:.1f}%)")
-        logging.info(f"  Failed: {failed} ({failed/len(results)*100:.1f}%)")
-        
-        return results
-    
+        # 清理 chunk 文件和日志
+        if config.CLEANUP_CHUNKS:
+            logging.info("Cleaning up chunk files and log...")
+            for filename in chunk_files:
+                os.remove(os.path.join(output_dir, filename))
+            if os.path.exists(config.PROCESSED_LOG):
+                os.remove(config.PROCESSED_LOG)
+            logging.info("✓ Cleanup complete.")
+
     def save_results(self, results: List[Dict]):
-        """保存结果到文件"""
+        """保存最终合并的结果"""
         os.makedirs(config.OUTPUT_DIR, exist_ok=True)
         
-        output_path = config.OUTPUT_JSON
-        logging.info(f"\nSaving results to {output_path}")
+        output_path = config.MERGED_SLICES_FILE
+        logging.info(f"\nSaving merged results to {output_path}")
         
         with open(output_path, 'w', encoding='utf-8') as f:
             json.dump(results, f, indent=2, ensure_ascii=False)
         
-        logging.info(f"✓ Results saved successfully")
+        logging.info(f"✓ Merged results saved successfully ({len(results)} items).")
         
         # 保存简化版本
         summary_path = output_path.replace('.json', '_summary.json')
         summary = []
         for r in results:
+            # 提取元数据，如果不存在则为空字典
+            metadata = r.get("metadata", {})
+            original_data = metadata.get("original_data", {})
+
             summary_item = {
-                "project": r.get("project"),
-                "file": r.get("file"),
-                "target_line": r.get("target_line"),
+                "project": original_data.get("project_name_with_version"),
+                "file": original_data.get("file_path"),
+                "target_line": original_data.get("line_number"),
                 "status": r.get("status"),
-                "function_name": r.get("function_name"),
+                "function_name": metadata.get("function_name"),
                 "slice_lines_count": len(r.get("slice_lines", [])),
-                "metadata": r.get("metadata", {})
             }
             if r.get("status") == "error":
                 summary_item["error"] = r.get("error")
@@ -529,8 +589,8 @@ def main():
     
     try:
         slicer = SingleFileSlicer()
-        results = slicer.slice_all()
-        slicer.save_results(results)
+        slicer.slice_all()
+        slicer.merge_chunks()
         
         print("\n" + "=" * 60)
         print("Done!")
