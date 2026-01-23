@@ -35,3 +35,9 @@ CFG_LABEL = "CFG"  # 控制流边
 
 # 占位符
 PLACEHOLDER = "    /* PLACEHOLDER: Code omitted for brevity */"
+
+# 分块保存和断点续传配置
+CHUNK_SIZE = 100  # 每个chunk保存的任务数
+ENABLE_CHECKPOINT = True  # 是否启用断点续传
+CHECKPOINT_FILE = os.path.join(OUTPUT_DIR, "checkpoint.json")  # 断点文件
+PROGRESS_FILE = os.path.join(OUTPUT_DIR, "progress.json")  # 进度文件

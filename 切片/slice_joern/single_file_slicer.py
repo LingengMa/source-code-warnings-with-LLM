@@ -202,6 +202,9 @@ class SingleFileSlicer:
     def __init__(self):
         self.joern_analyzer = JoernAnalyzer()
         self.tasks = self._load_tasks()
+        self.checkpoint_data = self._load_checkpoint()
+        self.processed_count = 0
+        self.chunk_results = []  # 当前chunk的结果
     
     def _load_tasks(self) -> List[Dict]:
         """加载切片任务"""
@@ -216,6 +219,95 @@ class SingleFileSlicer:
         
         logging.info(f"Loaded {len(tasks)} tasks")
         return tasks
+    
+    def _load_checkpoint(self) -> Dict:
+        """加载断点信息"""
+        if not config.ENABLE_CHECKPOINT:
+            return {"processed_indices": [], "chunk_count": 0}
+        
+        if os.path.exists(config.CHECKPOINT_FILE):
+            try:
+                with open(config.CHECKPOINT_FILE, 'r', encoding='utf-8') as f:
+                    checkpoint = json.load(f)
+                logging.info(f"Loaded checkpoint: {len(checkpoint.get('processed_indices', []))} tasks already processed")
+                return checkpoint
+            except Exception as e:
+                logging.warning(f"Failed to load checkpoint: {e}")
+        
+        return {"processed_indices": [], "chunk_count": 0}
+    
+    def _save_checkpoint(self, processed_index: int):
+        """保存断点信息"""
+        if not config.ENABLE_CHECKPOINT:
+            return
+        
+        self.checkpoint_data["processed_indices"].append(processed_index)
+        
+        os.makedirs(config.OUTPUT_DIR, exist_ok=True)
+        try:
+            with open(config.CHECKPOINT_FILE, 'w', encoding='utf-8') as f:
+                json.dump(self.checkpoint_data, f, indent=2)
+        except Exception as e:
+            logging.warning(f"Failed to save checkpoint: {e}")
+    
+    def _save_chunk(self, chunk_results: List[Dict], chunk_index: int):
+        """保存一个chunk的结果"""
+        os.makedirs(config.OUTPUT_DIR, exist_ok=True)
+        
+        chunk_file = os.path.join(config.OUTPUT_DIR, f"slices_chunk_{chunk_index:04d}.json")
+        
+        try:
+            with open(chunk_file, 'w', encoding='utf-8') as f:
+                json.dump(chunk_results, f, indent=2, ensure_ascii=False)
+            logging.info(f"✓ Saved chunk {chunk_index} ({len(chunk_results)} items) to {chunk_file}")
+            
+            # 更新checkpoint
+            self.checkpoint_data["chunk_count"] = chunk_index
+            
+            # 保存简化的summary
+            summary_file = os.path.join(config.OUTPUT_DIR, f"slices_chunk_{chunk_index:04d}_summary.json")
+            summary = []
+            for r in chunk_results:
+                summary_item = {
+                    "project": r.get("project"),
+                    "file": r.get("file"),
+                    "line": r.get("line"),
+                    "status": r.get("status"),
+                    "function_name": r.get("function_name"),
+                    "slice_lines_count": len(r.get("slice_lines", [])),
+                    "enhanced_lines_count": len(r.get("enhanced_slice_lines", []))
+                }
+                if r.get("status") == "error":
+                    summary_item["error"] = r.get("error")
+                summary.append(summary_item)
+            
+            with open(summary_file, 'w', encoding='utf-8') as f:
+                json.dump(summary, f, indent=2, ensure_ascii=False)
+            
+        except Exception as e:
+            logging.error(f"Failed to save chunk {chunk_index}: {e}")
+    
+    def _save_progress(self, current_index: int, total: int, success: int, failed: int):
+        """保存处理进度"""
+        progress = {
+            "current_index": current_index,
+            "total_tasks": total,
+            "processed": current_index + 1,
+            "success": success,
+            "failed": failed,
+            "progress_percentage": ((current_index + 1) / total * 100) if total > 0 else 0,
+            "timestamp": json.dumps(None)  # Will be replaced below
+        }
+        
+        # Add timestamp
+        import datetime
+        progress["timestamp"] = datetime.datetime.now().isoformat()
+        
+        try:
+            with open(config.PROGRESS_FILE, 'w', encoding='utf-8') as f:
+                json.dump(progress, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            logging.warning(f"Failed to save progress: {e}")
     
     def _load_source_file(self, project_version: str, file_path: str) -> Tuple[str, List[str]]:
         """
@@ -260,7 +352,7 @@ class SingleFileSlicer:
                 continue
         
         return None
-
+    
     def slice_one(self, task: Dict) -> Dict:
         """对单个任务执行切片"""
         project_name = task.get('project_name_with_version', 'unknown')
@@ -403,39 +495,99 @@ class SingleFileSlicer:
         return result
     
     def slice_all(self) -> List[Dict]:
-        """对所有任务执行切片"""
-        results = []
+        """对所有任务执行切片（支持断点续传和分chunk保存）"""
+        chunk_results = []
+        chunk_index = self.checkpoint_data.get("chunk_count", 0) + 1
+        
+        processed_indices = set(self.checkpoint_data.get("processed_indices", []))
+        success_count = 0
+        failed_count = 0
         
         logging.info(f"\nStarting batch slicing for {len(self.tasks)} tasks...")
+        if processed_indices:
+            logging.info(f"Resuming from checkpoint: {len(processed_indices)} tasks already processed")
         
-        for i, task in enumerate(self.tasks, 1):
-            logging.info(f"\n[{i}/{len(self.tasks)}]")
+        for i, task in enumerate(self.tasks):
+            # 跳过已处理的任务
+            if i in processed_indices:
+                logging.debug(f"Skipping already processed task {i+1}/{len(self.tasks)}")
+                continue
+            
+            logging.info(f"\n[{i+1}/{len(self.tasks)}] (Success: {success_count}, Failed: {failed_count})")
+            
+            # 执行切片
             result = self.slice_one(task)
-            results.append(result)
+            
+            # 统计结果
+            if result['status'] == 'success':
+                success_count += 1
+            else:
+                failed_count += 1
+            
+            # 添加到当前chunk
+            chunk_results.append(result)
+            
+            # 保存断点
+            self._save_checkpoint(i)
+            
+            # 保存进度
+            self._save_progress(i, len(self.tasks), success_count, failed_count)
+            
+            # 如果当前chunk已满，保存并开始新chunk
+            if len(chunk_results) >= config.CHUNK_SIZE:
+                self._save_chunk(chunk_results, chunk_index)
+                chunk_results = []
+                chunk_index += 1
+        
+        # 保存最后一个未满的chunk
+        if chunk_results:
+            self._save_chunk(chunk_results, chunk_index)
         
         # 统计
-        success = sum(1 for r in results if r['status'] == 'success')
-        failed = len(results) - success
+        total_processed = success_count + failed_count
         
         logging.info(f"\n{'='*60}")
         logging.info(f"Batch slicing completed!")
-        logging.info(f"  Total: {len(results)}")
-        logging.info(f"  Success: {success} ({success/len(results)*100:.1f}%)")
-        logging.info(f"  Failed: {failed} ({failed/len(results)*100:.1f}%)")
+        logging.info(f"  Total: {len(self.tasks)}")
+        logging.info(f"  Processed: {total_processed}")
+        logging.info(f"  Success: {success_count} ({success_count/total_processed*100:.1f}%)" if total_processed > 0 else "  Success: 0")
+        logging.info(f"  Failed: {failed_count} ({failed_count/total_processed*100:.1f}%)" if total_processed > 0 else "  Failed: 0")
+        logging.info(f"  Saved in {chunk_index} chunks")
         
-        return results
+        # 自动合并所有chunk文件
+        logging.info(f"\n{'='*60}")
+        logging.info("Merging all chunk files...")
+        self.merge_chunks()
+        
+        return []  # 不再返回所有结果，因为已经分chunk保存
     
     def save_results(self, results: List[Dict]):
-        """保存结果到文件"""
+        """
+        合并所有chunk文件并保存最终结果
+        注意：由于使用了分chunk保存，这个方法主要用于合并已有的chunk文件
+        """
         os.makedirs(config.OUTPUT_DIR, exist_ok=True)
         
+        # 如果没有传入results，尝试从chunk文件加载
+        if not results:
+            logging.info("Loading results from chunk files...")
+            results = self._load_all_chunks()
+        
+        if not results:
+            logging.warning("No results to save")
+            return
+        
         output_path = config.OUTPUT_JSON
-        logging.info(f"\nSaving results to {output_path}")
+        logging.info(f"\nSaving merged results to {output_path}")
         
-        with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(results, f, indent=2, ensure_ascii=False)
-        
-        logging.info(f"✓ Results saved successfully")
+        try:
+            with open(output_path, 'w', encoding='utf-8') as f:
+                json.dump(results, f, indent=2, ensure_ascii=False)
+            
+            logging.info(f"✓ Results saved successfully ({len(results)} items)")
+        except Exception as e:
+            logging.error(f"Failed to save results: {e}")
+            return
         
         # 保存简化版本
         summary_path = output_path.replace('.json', '_summary.json')
@@ -444,10 +596,11 @@ class SingleFileSlicer:
             summary_item = {
                 "project": r.get("project"),
                 "file": r.get("file"),
-                "target_line": r.get("target_line"),
+                "line": r.get("line"),
                 "status": r.get("status"),
                 "function_name": r.get("function_name"),
                 "slice_lines_count": len(r.get("slice_lines", [])),
+                "enhanced_lines_count": len(r.get("enhanced_slice_lines", [])),
                 "metadata": r.get("metadata", {})
             }
             if r.get("status") == "error":
@@ -458,18 +611,120 @@ class SingleFileSlicer:
             json.dump(summary, f, indent=2, ensure_ascii=False)
         
         logging.info(f"✓ Summary saved to {summary_path}")
+    
+    def _load_all_chunks(self) -> List[Dict]:
+        """加载所有chunk文件并合并"""
+        all_results = []
+        chunk_files = sorted([f for f in os.listdir(config.OUTPUT_DIR) 
+                             if f.startswith('slices_chunk_') and f.endswith('.json') 
+                             and '_summary' not in f])
+        
+        logging.info(f"Found {len(chunk_files)} chunk files")
+        
+        for chunk_file in chunk_files:
+            chunk_path = os.path.join(config.OUTPUT_DIR, chunk_file)
+            try:
+                with open(chunk_path, 'r', encoding='utf-8') as f:
+                    chunk_data = json.load(f)
+                all_results.extend(chunk_data)
+                logging.info(f"  Loaded {chunk_file}: {len(chunk_data)} items")
+            except Exception as e:
+                logging.warning(f"  Failed to load {chunk_file}: {e}")
+        
+        return all_results
+    
+    def merge_chunks(self):
+        """合并所有chunk文件为最终结果文件"""
+        logging.info("\nMerging all chunk files...")
+        results = self._load_all_chunks()
+        if results:
+            self.save_results(results)
+            logging.info(f"✓ Merged {len(results)} results from chunk files")
+        else:
+            logging.warning("No chunk files found to merge")
+    
+    def get_progress_info(self) -> Dict:
+        """获取处理进度信息"""
+        if os.path.exists(config.PROGRESS_FILE):
+            try:
+                with open(config.PROGRESS_FILE, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except Exception as e:
+                logging.warning(f"Failed to load progress: {e}")
+        return {}
+    
+    def clear_checkpoint(self):
+        """清除断点信息（重新开始处理）"""
+        if os.path.exists(config.CHECKPOINT_FILE):
+            try:
+                os.remove(config.CHECKPOINT_FILE)
+                logging.info("✓ Checkpoint cleared")
+            except Exception as e:
+                logging.warning(f"Failed to clear checkpoint: {e}")
+        
+        if os.path.exists(config.PROGRESS_FILE):
+            try:
+                os.remove(config.PROGRESS_FILE)
+                logging.info("✓ Progress file cleared")
+            except Exception as e:
+                logging.warning(f"Failed to clear progress: {e}")
+        
+        self.checkpoint_data = {"processed_indices": [], "chunk_count": 0}
 
 
 def main():
     """主函数"""
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='Single File Slicer for C/C++ Projects')
+    parser.add_argument('--clear', action='store_true', 
+                       help='Clear checkpoint and restart from beginning')
+    parser.add_argument('--progress', action='store_true',
+                       help='Show current progress')
+    parser.add_argument('--chunk-size', type=int, default=None,
+                       help='Override default chunk size')
+    
+    args = parser.parse_args()
+    
     print("=" * 60)
     print("Single File Slicer for C/C++ Projects")
     print("=" * 60)
     
     try:
         slicer = SingleFileSlicer()
-        results = slicer.slice_all()
-        slicer.save_results(results)
+        
+        # 显示进度
+        if args.progress:
+            progress = slicer.get_progress_info()
+            if progress:
+                print(f"\nCurrent Progress:")
+                print(f"  Processed: {progress.get('processed', 0)}/{progress.get('total_tasks', 0)}")
+                print(f"  Progress: {progress.get('progress_percentage', 0):.1f}%")
+                print(f"  Success: {progress.get('success', 0)}")
+                print(f"  Failed: {progress.get('failed', 0)}")
+                print(f"  Last Update: {progress.get('timestamp', 'N/A')}")
+            else:
+                print("\nNo progress information available")
+            return 0
+        
+        # 清除断点
+        if args.clear:
+            print("\nClearing checkpoint...")
+            slicer.clear_checkpoint()
+        
+        # 设置chunk大小
+        if args.chunk_size:
+            config.CHUNK_SIZE = args.chunk_size
+            print(f"\nChunk size set to: {config.CHUNK_SIZE}")
+        
+        # 执行切片
+        print(f"\nConfiguration:")
+        print(f"  Chunk Size: {config.CHUNK_SIZE}")
+        print(f"  Checkpoint Enabled: {config.ENABLE_CHECKPOINT}")
+        print(f"  AST Enhancement: {config.ENABLE_AST_FIX}")
+        
+        # 执行切片 (完成后会自动合并chunk)
+        slicer.slice_all()
         
         print("\n" + "=" * 60)
         print("Done!")
@@ -477,6 +732,7 @@ def main():
         
     except KeyboardInterrupt:
         print("\n\nInterrupted by user")
+        print("Progress has been saved. Run again to resume from checkpoint.")
         return 1
     except Exception as e:
         print(f"\n\nFatal error: {e}")
