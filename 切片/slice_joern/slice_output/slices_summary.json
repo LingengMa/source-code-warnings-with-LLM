@@ -2,41 +2,24 @@
   {
     "project": "ffmpeg-6.1.1",
     "file": "libavcodec/motion_est_template.c",
-    "target_line": 785,
+    "target_line": null,
     "status": "success",
     "function_name": "var_diamond_search",
-    "slice_lines_count": 27
-  },
-  {
-    "project": "ffmpeg-6.1.1",
-    "file": "libavcodec/mpegaudioenc_template.c",
-    "target_line": 199,
-    "status": "success",
-    "function_name": null,
-    "slice_lines_count": 0
-  },
-  {
-    "project": "ffmpeg-6.1.1",
-    "file": "libavcodec/smc.c",
-    "target_line": 137,
-    "status": "success",
-    "function_name": "smc_decode_stream",
-    "slice_lines_count": 160
-  },
-  {
-    "project": "ffmpeg-6.1.1",
-    "file": "libavcodec/vc1dec.c",
-    "target_line": 483,
-    "status": "success",
-    "function_name": null,
-    "slice_lines_count": 0
-  },
-  {
-    "project": "ffmpeg-6.1.1",
-    "file": "libavcodec/wavpackenc.c",
-    "target_line": 2356,
-    "status": "success",
-    "function_name": "decorr_stereo_pass_id2",
-    "slice_lines_count": 61
+    "slice_lines_count": 27,
+    "metadata": {
+      "function_name": "var_diamond_search",
+      "function_start_line": 771,
+      "function_end_line": 830,
+      "target_line": 785,
+      "backward_nodes": 80,
+      "forward_nodes": 323,
+      "total_slice_nodes": 403,
+      "total_slice_lines": 27,
+      "slice_density": 0.45,
+      "original_slice_lines": 27,
+      "enhanced_slice_lines": 35,
+      "final_node_count": 403,
+      "ast_enhanced": true
+    }
   }
 ]

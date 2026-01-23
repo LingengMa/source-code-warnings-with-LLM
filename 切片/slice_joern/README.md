@@ -19,7 +19,6 @@ slice_joern/
 ├── slicer.py             # 主程序入口
 ├── pdg_loader.py         # PDG 加载和解析模块
 ├── slice_engine.py       # 切片引擎核心逻辑
-├── ast_fixer.py          # AST 语法修复模块
 ├── config.py             # 配置文件
 ├── requirements.txt      # 依赖包
 ├── slice_input/          # 输入数据

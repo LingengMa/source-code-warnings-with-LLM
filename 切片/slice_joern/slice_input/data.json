@@ -5,58 +5,6 @@
         "project_name_with_version": "ffmpeg-6.1.1",
         "project_version": "6.1.1",
         "file_path": "libavcodec/motion_est_template.c",
-        "line_number": 785,
-        "cwe": null,
-        "rule_id": "cpp/complex-block",
-        "message": "Block with too many statements (4 complex statements in the block).",
-        "severity": null
-    },
-    {
-        "tool_name": "codeql",
-        "project_name": "ffmpeg",
-        "project_name_with_version": "ffmpeg-6.1.1",
-        "project_version": "6.1.1",
-        "file_path": "libavcodec/mpegaudioenc_template.c",
-        "line_number": 199,
-        "cwe": null,
-        "rule_id": "cpp/complex-block",
-        "message": "Block with too many statements (4 complex statements in the block).",
-        "severity": null
-    },
-    {
-        "tool_name": "codeql",
-        "project_name": "ffmpeg",
-        "project_name_with_version": "ffmpeg-6.1.1",
-        "project_version": "6.1.1",
-        "file_path": "libavcodec/smc.c",
-        "line_number": 137,
-        "cwe": null,
-        "rule_id": "cpp/complex-block",
-        "message": "Block with too many statements (7 complex statements in the block).",
-        "severity": null
-    },
-    {
-        "tool_name": "codeql",
-        "project_name": "ffmpeg",
-        "project_name_with_version": "ffmpeg-6.1.1",
-        "project_version": "6.1.1",
-        "file_path": "libavcodec/vc1dec.c",
-        "line_number": 483,
-        "cwe": null,
-        "rule_id": "cpp/complex-block",
-        "message": "Block with too many statements (4 complex statements in the block).",
-        "severity": null
-    },
-    {
-        "tool_name": "codeql",
-        "project_name": "ffmpeg",
-        "project_name_with_version": "ffmpeg-6.1.1",
-        "project_version": "6.1.1",
-        "file_path": "libavcodec/wavpackenc.c",
-        "line_number": 2356,
-        "cwe": null,
-        "rule_id": "cpp/complex-block",
-        "message": "Block with too many statements (6 complex statements in the block).",
-        "severity": null
+        "line_number": 785
     }
 ]

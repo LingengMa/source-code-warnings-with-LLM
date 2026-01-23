@@ -57,60 +57,49 @@ class PDG:
         # 加载图
         self.g: nx.MultiDiGraph = nx.nx_agraph.read_dot(pdg_path)
         
-        # 解析节点
-        self.nodes: Dict[int, PDGNode] = {}
-        for node_id, attrs in self.g.nodes(data=True):
-            # 确保 node_id 是整数
-            try:
-                int_node_id = int(node_id)
-                self.nodes[int_node_id] = PDGNode(int_node_id, attrs)
-            except (ValueError, TypeError):
-                logging.warning(f"Skipping non-integer node ID: {node_id} in {pdg_path}")
-                continue
-
         # 查找 METHOD 节点
-        self._method_node_id = None
-        for node_id, node in self.nodes.items():
-            if node.node_type == 'METHOD':
-                self._method_node_id = node_id
+        self._method_node = None
+        for node in self.g.nodes():
+            if self.g.nodes[node].get('NODE_TYPE') == 'METHOD':
+                self._method_node = node
                 break
         
-        if self._method_node_id is None:
+        if self._method_node is None:
             raise ValueError(f"No METHOD node found in {pdg_path}")
     
     @property
     def method_node(self) -> PDGNode:
         """获取方法节点"""
-        return self.nodes[self._method_node_id]
+        return PDGNode(self._method_node, self.g.nodes[self._method_node])
     
     @property
     def method_name(self) -> Optional[str]:
         """获取方法名"""
-        return self.nodes[self._method_node_id].attrs.get('NAME')
+        return self.g.nodes[self._method_node].get('NAME')
     
     @property
     def start_line(self) -> Optional[int]:
         """获取方法起始行"""
-        return self.nodes[self._method_node_id].line_number
+        line = self.g.nodes[self._method_node].get('LINE_NUMBER')
+        return int(line) if line else None
     
     @property
     def end_line(self) -> Optional[int]:
         """获取方法结束行"""
-        line = self.nodes[self._method_node_id].attrs.get('LINE_NUMBER_END')
+        line = self.g.nodes[self._method_node].get('LINE_NUMBER_END')
         return int(line) if line else None
     
     @property
     def filename(self) -> Optional[str]:
         """获取文件名"""
-        return self.nodes[self._method_node_id].filename
+        return self.g.nodes[self._method_node].get('FILENAME')
     
-    def get_node(self, node_id) -> Optional[PDGNode]:
+    def get_node(self, node_id) -> PDGNode:
         """获取指定节点"""
-        try:
-            return self.nodes.get(int(node_id))
-        except (ValueError, TypeError):
-            return None
-
+        if isinstance(node_id, PDGNode):
+            node_id = node_id.node_id
+        return PDGNode(node_id, self.g.nodes[node_id])
+    
     def get_ast_parent(self, node_id: int) -> Optional[PDGNode]:
         """获取节点的 AST 父节点"""
         # 在 Joern 的 PDG 导出中，AST 边通常没有特定标签
