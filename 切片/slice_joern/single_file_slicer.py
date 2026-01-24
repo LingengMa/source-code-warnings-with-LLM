@@ -1,6 +1,7 @@
 """
 单文件切片分析器
 直接对单个 C/C++ 文件进行切片分析，使用 Joern 实时生成 PDG
+支持多进程并行处理和断点续传
 """
 import os
 import json
@@ -10,6 +11,8 @@ import tempfile
 import shutil
 from typing import Dict, List, Set, Tuple, Optional
 import traceback
+from multiprocessing import Pool, Manager, Lock
+import time
 
 import config
 from pdg_loader import PDG, PDGNode
@@ -196,6 +199,161 @@ class JoernAnalyzer:
         logging.info("✓ PDG preprocessing complete")
 
 
+# 全局工作函数,用于多进程池
+def process_single_task(args):
+    """
+    处理单个任务的工作函数(用于多进程)
+    
+    Args:
+        args: (task_index, task, output_dir)
+    
+    Returns:
+        (task_index, result)
+    """
+    task_index, task, output_dir = args
+    
+    # 重新配置日志(每个进程单独配置)
+    import logging
+    logging.basicConfig(
+        level=logging.WARNING,  # 子进程使用WARNING级别,减少输出
+        format='%(asctime)s - [Process %(process)d] - %(levelname)s - %(message)s'
+    )
+    
+    # 创建临时的切片器实例
+    joern_analyzer = JoernAnalyzer()
+    
+    project_name = task.get('project_name_with_version', 'unknown')
+    file_path = task.get('file_path', 'unknown')
+    target_line = task.get('line_number', 0)
+    
+    result = {
+        "project": project_name,
+        "file": file_path,
+        "line": target_line,
+        "status": "pending"
+    }
+    
+    temp_dir = None
+    
+    try:
+        # 1. 加载源文件
+        full_path = os.path.join(config.REPOSITORY_DIR, project_name, file_path)
+        if not os.path.exists(full_path):
+            raise SingleFileSlicerException(f"Source file not found: {full_path}")
+        
+        with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
+            code_lines = f.readlines()
+        
+        # 2. 创建临时目录
+        temp_dir = tempfile.mkdtemp(prefix="slice_")
+        
+        # 3. 使用 Joern 分析文件
+        pdg_dir = joern_analyzer.analyze_file(full_path, temp_dir)
+        
+        # 4. 预处理 PDG
+        cfg_dir = os.path.join(temp_dir, 'cfg')
+        cpg_dir = os.path.join(temp_dir, 'cpg')
+        if os.path.exists(cfg_dir) and os.path.exists(cpg_dir):
+            joern_analyzer.preprocess_pdg(pdg_dir, cfg_dir, cpg_dir)
+        
+        # 5. 查找包含目标行的 PDG
+        file_name = os.path.basename(file_path)
+        pdg = None
+        for pdg_file in os.listdir(pdg_dir):
+            if not pdg_file.endswith('-pdg.dot'):
+                continue
+            pdg_path = os.path.join(pdg_dir, pdg_file)
+            try:
+                temp_pdg = PDG(pdg_path)
+                if temp_pdg.filename and temp_pdg.filename.endswith(file_name):
+                    if temp_pdg.start_line and temp_pdg.end_line:
+                        if temp_pdg.start_line <= target_line <= temp_pdg.end_line:
+                            pdg = temp_pdg
+                            break
+            except:
+                continue
+        
+        if not pdg:
+            raise SingleFileSlicerException(f"No PDG found for line {target_line}")
+        
+        result["function_name"] = pdg.method_name
+        result["function_start_line"] = pdg.start_line
+        result["function_end_line"] = pdg.end_line
+        
+        # 6. 执行切片
+        engine = SliceEngine(pdg)
+        slice_nodes, metadata = engine.slice(target_line)
+        
+        # 7. 提取切片行号
+        slice_lines = {node.line_number for node in slice_nodes if node.line_number}
+        
+        # 8. AST 增强
+        enhanced_lines = slice_lines
+        ast_enhanced_success = False
+        if config.ENABLE_AST_FIX:
+            try:
+                from ast_enhancer import enhance_slice_with_ast
+                func_start_idx = (pdg.start_line or 1) - 1
+                func_end_idx = (pdg.end_line or len(code_lines))
+                func_code = "".join(code_lines[func_start_idx:func_end_idx])
+                
+                enhanced_lines = enhance_slice_with_ast(
+                    source_code=func_code,
+                    slice_lines=slice_lines,
+                    language=config.LANGUAGE,
+                    function_start_line=pdg.start_line or 1
+                )
+                ast_enhanced_success = len(enhanced_lines) > len(slice_lines)
+            except:
+                enhanced_lines = slice_lines
+        
+        # 9. 提取切片代码
+        from code_extractor import extract_code
+        source_line_dict = {i + 1: line for i, line in enumerate(code_lines)}
+        
+        sliced_code = extract_code(
+            slice_lines=enhanced_lines,
+            source_lines=source_line_dict,
+            placeholder=None
+        )
+        
+        sliced_code_with_placeholder = extract_code(
+            slice_lines=enhanced_lines,
+            source_lines=source_line_dict,
+            placeholder=config.PLACEHOLDER
+        )
+        
+        # 10. 构建结果
+        result["status"] = "success"
+        result["slice_lines"] = sorted(list(slice_lines))
+        result["enhanced_slice_lines"] = sorted(list(enhanced_lines))
+        result["sliced_code"] = sliced_code
+        result["sliced_code_with_placeholder"] = sliced_code_with_placeholder
+        result["metadata"] = metadata
+        
+        metadata["original_slice_lines"] = len(slice_lines)
+        metadata["enhanced_slice_lines"] = len(enhanced_lines)
+        metadata["final_node_count"] = len(slice_nodes)
+        metadata["ast_enhanced"] = ast_enhanced_success
+        
+    except SingleFileSlicerException as e:
+        result["status"] = "error"
+        result["error"] = str(e)
+    except Exception as e:
+        result["status"] = "error"
+        result["error"] = str(e)
+        result["traceback"] = traceback.format_exc()
+    finally:
+        # 清理临时目录
+        if temp_dir and os.path.exists(temp_dir):
+            try:
+                shutil.rmtree(temp_dir)
+            except:
+                pass
+    
+    return (task_index, result)
+
+
 class SingleFileSlicer:
     """单文件切片器"""
     
@@ -205,6 +363,12 @@ class SingleFileSlicer:
         self.checkpoint_data = self._load_checkpoint()
         self.processed_count = 0
         self.chunk_results = []  # 当前chunk的结果
+        
+        # 多进程共享数据
+        self.manager = None
+        self.lock = None
+        self.shared_checkpoint = None
+        self.shared_stats = None
     
     def _load_tasks(self) -> List[Dict]:
         """加载切片任务"""
@@ -561,6 +725,111 @@ class SingleFileSlicer:
         
         return []  # 不再返回所有结果，因为已经分chunk保存
     
+    def slice_all_multiprocess(self) -> List[Dict]:
+        """使用多进程并行处理所有任务"""
+        from multiprocessing import Pool, Manager
+        
+        chunk_results = []
+        chunk_index = self.checkpoint_data.get("chunk_count", 0) + 1
+        
+        processed_indices = set(self.checkpoint_data.get("processed_indices", []))
+        success_count = 0
+        failed_count = 0
+        
+        logging.info(f"\nStarting batch slicing with {config.NUM_PROCESSES} processes...")
+        logging.info(f"Total tasks: {len(self.tasks)}")
+        if processed_indices:
+            logging.info(f"Resuming from checkpoint: {len(processed_indices)} tasks already processed")
+        
+        # 准备待处理的任务列表
+        tasks_to_process = []
+        for i, task in enumerate(self.tasks):
+            if i not in processed_indices:
+                tasks_to_process.append((i, task, config.OUTPUT_DIR))
+        
+        if not tasks_to_process:
+            logging.info("All tasks already completed!")
+            self.merge_chunks()
+            return []
+        
+        logging.info(f"Tasks to process: {len(tasks_to_process)}")
+        
+        # 使用进程池处理
+        start_time = time.time()
+        processed_count = 0
+        
+        try:
+            with Pool(processes=config.NUM_PROCESSES) as pool:
+                # 使用 imap_unordered 获取结果,按完成顺序返回
+                for task_index, result in pool.imap_unordered(process_single_task, tasks_to_process):
+                    processed_count += 1
+                    
+                    # 统计结果
+                    if result['status'] == 'success':
+                        success_count += 1
+                    else:
+                        failed_count += 1
+                    
+                    # 添加到当前chunk
+                    chunk_results.append(result)
+                    
+                    # 保存断点
+                    self._save_checkpoint(task_index)
+                    
+                    # 保存进度
+                    total_processed = len(processed_indices) + processed_count
+                    self._save_progress(task_index, len(self.tasks), success_count, failed_count)
+                    
+                    # 显示进度
+                    elapsed = time.time() - start_time
+                    avg_time = elapsed / processed_count if processed_count > 0 else 0
+                    remaining = len(tasks_to_process) - processed_count
+                    eta = avg_time * remaining
+                    
+                    logging.info(
+                        f"[{total_processed}/{len(self.tasks)}] "
+                        f"Success: {success_count}, Failed: {failed_count}, "
+                        f"Speed: {avg_time:.1f}s/task, ETA: {eta/3600:.1f}h"
+                    )
+                    
+                    # 如果当前chunk已满,保存并开始新chunk
+                    if len(chunk_results) >= config.CHUNK_SIZE:
+                        self._save_chunk(chunk_results, chunk_index)
+                        chunk_results = []
+                        chunk_index += 1
+        
+        except KeyboardInterrupt:
+            logging.warning("\nProcess interrupted by user")
+            # 保存当前已完成的chunk
+            if chunk_results:
+                self._save_chunk(chunk_results, chunk_index)
+            raise
+        
+        # 保存最后一个未满的chunk
+        if chunk_results:
+            self._save_chunk(chunk_results, chunk_index)
+        
+        # 统计
+        total_processed = success_count + failed_count
+        elapsed = time.time() - start_time
+        
+        logging.info(f"\n{'='*60}")
+        logging.info(f"Batch slicing completed!")
+        logging.info(f"  Total: {len(self.tasks)}")
+        logging.info(f"  Processed this run: {total_processed}")
+        logging.info(f"  Success: {success_count} ({success_count/total_processed*100:.1f}%)" if total_processed > 0 else "  Success: 0")
+        logging.info(f"  Failed: {failed_count} ({failed_count/total_processed*100:.1f}%)" if total_processed > 0 else "  Failed: 0")
+        logging.info(f"  Time elapsed: {elapsed/3600:.2f} hours")
+        logging.info(f"  Average speed: {elapsed/total_processed:.1f} seconds/task" if total_processed > 0 else "")
+        logging.info(f"  Saved in {chunk_index} chunks")
+        
+        # 自动合并所有chunk文件
+        logging.info(f"\n{'='*60}")
+        logging.info("Merging all chunk files...")
+        self.merge_chunks()
+        
+        return []
+    
     def save_results(self, results: List[Dict]):
         """
         合并所有chunk文件并保存最终结果
@@ -683,6 +952,10 @@ def main():
                        help='Show current progress')
     parser.add_argument('--chunk-size', type=int, default=None,
                        help='Override default chunk size')
+    parser.add_argument('--processes', type=int, default=None,
+                       help='Number of parallel processes (default: 3)')
+    parser.add_argument('--no-multiprocess', action='store_true',
+                       help='Disable multiprocessing, run in single process')
     
     args = parser.parse_args()
     
@@ -717,14 +990,27 @@ def main():
             config.CHUNK_SIZE = args.chunk_size
             print(f"\nChunk size set to: {config.CHUNK_SIZE}")
         
+        # 设置进程数
+        if args.processes:
+            config.NUM_PROCESSES = args.processes
+        
+        # 设置是否启用多进程
+        use_multiprocess = config.ENABLE_MULTIPROCESSING and not args.no_multiprocess
+        
         # 执行切片
         print(f"\nConfiguration:")
         print(f"  Chunk Size: {config.CHUNK_SIZE}")
         print(f"  Checkpoint Enabled: {config.ENABLE_CHECKPOINT}")
         print(f"  AST Enhancement: {config.ENABLE_AST_FIX}")
+        print(f"  Multiprocessing: {'Enabled' if use_multiprocess else 'Disabled'}")
+        if use_multiprocess:
+            print(f"  Parallel Processes: {config.NUM_PROCESSES}")
         
         # 执行切片 (完成后会自动合并chunk)
-        slicer.slice_all()
+        if use_multiprocess:
+            slicer.slice_all_multiprocess()
+        else:
+            slicer.slice_all()
         
         print("\n" + "=" * 60)
         print("Done!")

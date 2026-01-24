@@ -2,9 +2,15 @@
 
 ## 🚀 快速开始
 
-### 正常运行 (完成后自动合并chunk)
+### 正常运行 (3进程并行,完成后自动合并chunk)
 ```bash
 python single_file_slicer.py
+```
+
+### 自定义进程数
+```bash
+# 使用5个进程
+python single_file_slicer.py --processes 5
 ```
 
 ### 查看进度
@@ -29,6 +35,9 @@ python single_file_slicer.py --clear
 
 | 功能 | 说明 | 命令 |
 |------|------|------|
+| 多进程并行 | 3进程并行处理 | 默认启用 |
+| 自定义进程数 | 调整并行数量 | `--processes N` |
+| 禁用多进程 | 单进程运行 | `--no-multiprocess` |
 | 分块保存 | 每处理100个任务保存一次 | 自动执行 |
 | 断点续传 | 中断后自动继续 | 自动检测 |
 | 进度跟踪 | 实时保存进度信息 | `--progress` |
@@ -57,6 +66,8 @@ slice_output/
 CHUNK_SIZE = 100              # 每个chunk的大小
 ENABLE_CHECKPOINT = True      # 启用断点续传
 ENABLE_AST_FIX = True        # 启用AST增强
+NUM_PROCESSES = 3             # 并行进程数
+ENABLE_MULTIPROCESSING = True # 启用多进程
 ```
 
 ## 🔧 常用操作
@@ -137,10 +148,22 @@ rm slice_output/progress.json
 
 ## 📈 性能参考
 
+**单进程模式:**
 - 单任务处理时间: 5-10秒
 - 5万任务预计时间: 70-140小时
-- 内存占用: < 500MB (使用分chunk)
+- 内存占用: ~500MB
 - 磁盘占用: 2-10GB (5万任务)
+
+**3进程并行模式 (默认):**
+- 单任务处理时间: 5-10秒
+- 5万任务预计时间: **23-47小时** (加速3倍)
+- 内存占用: ~1.5GB (3个进程)
+- 磁盘占用: 2-10GB (5万任务)
+
+**5进程并行模式:**
+- 5万任务预计时间: **14-28小时** (加速5倍)
+- 内存占用: ~2.5GB (5个进程)
+- 建议CPU: 6核以上
 
 ## 🎯 典型工作流
 

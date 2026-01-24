@@ -76,6 +76,8 @@ def test_config():
     print(f"  CHUNK_SIZE: {config.CHUNK_SIZE}")
     print(f"  ENABLE_CHECKPOINT: {config.ENABLE_CHECKPOINT}")
     print(f"  ENABLE_AST_FIX: {config.ENABLE_AST_FIX}")
+    print(f"  ENABLE_MULTIPROCESSING: {config.ENABLE_MULTIPROCESSING}")
+    print(f"  NUM_PROCESSES: {config.NUM_PROCESSES}")
     print(f"  OUTPUT_DIR: {config.OUTPUT_DIR}")
     print(f"  DATA_JSON: {config.DATA_JSON}")
     
@@ -84,6 +86,14 @@ def test_config():
         with open(config.DATA_JSON, 'r') as f:
             tasks = json.load(f)
         print(f"  Tasks to process: {len(tasks)}")
+        
+        # 预估时间
+        if config.ENABLE_MULTIPROCESSING:
+            estimated_hours = len(tasks) * 7.5 / 3600 / config.NUM_PROCESSES
+            print(f"  Estimated time ({config.NUM_PROCESSES} processes): {estimated_hours:.1f} hours")
+        else:
+            estimated_hours = len(tasks) * 7.5 / 3600
+            print(f"  Estimated time (single process): {estimated_hours:.1f} hours")
     else:
         print(f"  ✗ DATA_JSON not found: {config.DATA_JSON}")
     

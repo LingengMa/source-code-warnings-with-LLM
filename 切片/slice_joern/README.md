@@ -10,6 +10,7 @@
 - ✅ AST 语法修复，确保输出代码语法正确
 - ✅ 自动识别并记录所在函数信息
 - ✅ 支持批量处理多个切片任务
+- ✅ **多进程并行**: 使用3个进程并行处理,大幅提升速度
 - ✅ **分块保存**: 自动分chunk保存结果,避免内存溢出
 - ✅ **断点续传**: 支持中断后继续处理,不会重复计算
 - ✅ **进度跟踪**: 实时保存进度,随时查看处理状态
@@ -51,7 +52,7 @@ pip install -r requirements.txt
 ### 3. 运行切片
 
 ```bash
-# 基本用法 - 正常执行切片 (完成后自动合并chunk文件)
+# 基本用法 - 多进程并行执行切片 (默认3进程,完成后自动合并chunk文件)
 python single_file_slicer.py
 
 # 查看当前进度
@@ -62,6 +63,12 @@ python single_file_slicer.py --clear
 
 # 自定义chunk大小(默认100)
 python single_file_slicer.py --chunk-size 200
+
+# 自定义进程数(默认3)
+python single_file_slicer.py --processes 5
+
+# 禁用多进程,使用单进程运行
+python single_file_slicer.py --no-multiprocess
 ```
 
 ### 4. 监控进度
@@ -106,6 +113,8 @@ python single_file_slicer.py
 - `OUTPUT_FORMAT`: 输出格式（json/markdown）
 - `CHUNK_SIZE`: 每个chunk保存的任务数（默认：100）
 - `ENABLE_CHECKPOINT`: 是否启用断点续传（默认：True）
+- `NUM_PROCESSES`: 并行进程数（默认：3）
+- `ENABLE_MULTIPROCESSING`: 是否启用多进程（默认：True）
 
 ## 断点续传与分块保存
 
@@ -115,6 +124,23 @@ python single_file_slicer.py
 - 每处理 N 个任务（CHUNK_SIZE）保存一个chunk文件
 - 中断后重新运行会自动跳过已处理的任务
 - 所有进度信息保存在 `slice_output/` 目录
+
+### 多进程并行
+
+- **默认使用3个进程并行处理**，显著提升处理速度
+- 每个进程独立处理任务，互不干扰
+- 自动负载均衡，谁先完成谁先取新任务
+- 支持中断和恢复，每个已完成的任务都会保存
+
+### 性能提升
+
+| 配置 | 单任务耗时 | 5万任务总耗时 | 加速比 |
+|------|------------|---------------|--------|
+| 单进程 | 10秒 | ~140小时 | 1x |
+| 3进程并行 | 10秒 | ~47小时 | 3x |
+| 5进程并行 | 10秒 | ~28小时 | 5x |
+
+**注意**: 实际加速比取决于CPU核心数和I/O性能
 
 ### 输出文件
 

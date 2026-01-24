@@ -2,14 +2,24 @@
 
 ## 可用命令
 
-### 正常运行
+### 正常运行 (多进程)
 ```bash
 python single_file_slicer.py
 ```
+- **使用3个进程并行处理**
 - 执行切片任务
 - 自动断点续传
 - 每100个任务保存一个chunk
 - **完成后自动合并所有chunk文件**
+
+### 自定义进程数
+```bash
+# 使用5个进程
+python single_file_slicer.py --processes 5
+
+# 使用单进程(禁用多进程)
+python single_file_slicer.py --no-multiprocess
+```
 
 ### 查看进度
 ```bash
@@ -36,11 +46,14 @@ python single_file_slicer.py --chunk-size 200
 
 ### 组合使用
 ```bash
-# 清除断点并使用大chunk重新运行
-python single_file_slicer.py --clear --chunk-size 500
+# 清除断点并使用大chunk+更多进程重新运行
+python single_file_slicer.py --clear --chunk-size 500 --processes 5
 
 # 清除断点后正常运行
 python single_file_slicer.py --clear
+
+# 使用单进程运行(调试时)
+python single_file_slicer.py --no-multiprocess
 ```
 
 ## 辅助工具
@@ -92,3 +105,7 @@ ls -lh slice_output/slices.json
 2. **断点续传**: 中断后直接运行即可继续，无需特殊参数
 3. **chunk文件**: 中间chunk文件可以保留作为备份，也可以删除
 4. **进度文件**: `checkpoint.json` 和 `progress.json` 不要手动修改
+5. **多进程**: 默认使用3进程并行，可通过 `--processes N` 调整
+6. **进程数建议**: 根据CPU核心数设置，通常设为核心数的50-80%
+7. **内存占用**: 多进程会增加内存占用，每个进程约需500MB
+8. **调试模式**: 调试时建议使用 `--no-multiprocess` 单进程运行

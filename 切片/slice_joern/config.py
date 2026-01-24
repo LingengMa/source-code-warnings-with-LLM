@@ -41,3 +41,7 @@ CHUNK_SIZE = 100  # 每个chunk保存的任务数
 ENABLE_CHECKPOINT = True  # 是否启用断点续传
 CHECKPOINT_FILE = os.path.join(OUTPUT_DIR, "checkpoint.json")  # 断点文件
 PROGRESS_FILE = os.path.join(OUTPUT_DIR, "progress.json")  # 进度文件
+
+# 多进程配置
+NUM_PROCESSES = 3  # 并行进程数
+ENABLE_MULTIPROCESSING = True  # 是否启用多进程
