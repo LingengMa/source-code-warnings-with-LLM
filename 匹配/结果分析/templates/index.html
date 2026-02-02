@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>人工标注工具</title>
+    <style>
+        body { font-family: sans-serif; margin: 2em; }
+        .container { max-width: 800px; margin: auto; }
+        .code-block { background-color: #f4f4f4; padding: 1em; border: 1px solid #ddd; white-space: pre-wrap; font-family: monospace; max-height: 300px; overflow-y: auto; }
+        .item-details { margin-bottom: 1em; }
+        .item-details p { margin: 0.5em 0; }
+        .buttons { margin-top: 1em; }
+        .buttons button { padding: 0.5em 1em; font-size: 1em; cursor: pointer; margin-right: 10px; }
+        .tp-button { background-color: #4CAF50; color: white; }
+        .fp-button { background-color: #f44336; color: white; }
+        .unknown-button { background-color: #ff9800; color: white; }
+        .progress { margin-bottom: 1em; }
+        .nav-buttons { margin-top: 1em; display: flex; justify-content: space-between; align-items: center; }
+        .manual-label { font-weight: bold; color: #0056b3; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>人工标注工具</h1>
+        <div class="progress">
+            <p>进度: {{ index + 1 }} / {{ total }}</p>
+        </div>
+        <div class="item-details">
+            <p><strong>ID:</strong> {{ item.id }}</p>
+            {% if item.manual_label %}
+            <p><strong>当前人工标注:</strong> <span class="manual-label">{{ item.manual_label }}</span></p>
+            {% endif %}
+            <p><strong>LLM Label:</strong> {{ item.llm_label }}</p>
+            <p><strong>LLM Label Reason:</strong> {{ item.llm_label_reason }}</p>
+            <p><strong>Tool Name:</strong> {{ item.tool_name }}</p>
+            <p><strong>Project:</strong> {{ item.project_name_with_version }}</p>
+            <p><strong>Line:</strong> {{ item.line_number }}</p>
+            <p><strong>Function:</strong> {{ item.function_name }}</p>
+            <p><strong>Rule ID:</strong> {{ item.rule_id }}</p>
+            <p><strong>Message:</strong> {{ item.message }}</p>
+            <p><strong>Original Label:</strong> {{ item.label }}</p>
+            <p><strong>Sliced Code:</strong></p>
+            <div class="code-block">
+                {% if item.sliced_code is string %}
+                    {{ item.sliced_code }}
+                {% else %}
+                    {{ '\n'.join(item.sliced_code) }}
+                {% endif %}
+            </div>
+        </div>
+        <div class="buttons">
+            <form action="{{ url_for('label') }}" method="post" style="display: inline;">
+                <input type="hidden" name="id" value="{{ item.id }}">
+                <input type="hidden" name="current_index" value="{{ index }}">
+                <button type="submit" name="label" value="TP" class="tp-button">标注为 TP</button>
+            </form>
+            <form action="{{ url_for('label') }}" method="post" style="display: inline;">
+                <input type="hidden" name="id" value="{{ item.id }}">
+                <input type="hidden" name="current_index" value="{{ index }}">
+                <button type="submit" name="label" value="FP" class="fp-button">标注为 FP</button>
+            </form>
+            <form action="{{ url_for('label') }}" method="post" style="display: inline;">
+                <input type="hidden" name="id" value="{{ item.id }}">
+                <input type="hidden" name="current_index" value="{{ index }}">
+                <button type="submit" name="label" value="Unknown" class="unknown-button">标注为 Unknown</button>
+            </form>
+        </div>
+        <div class="nav-buttons">
+            <a href="{{ url_for('nav', direction='prev') }}">上一个</a>
+            <a href="{{ url_for('nav', direction='first_unlabeled') }}">下一个未标注</a>
+            <a href="{{ url_for('nav', direction='next') }}">下一个</a>
+        </div>
+    </div>
+</body>
+</html>
