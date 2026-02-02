@@ -159,15 +159,6 @@
             background: #805ad5;
         }
 
-        .btn-delete {
-            background: #718096;
-            color: white;
-        }
-
-        .btn-delete:hover {
-            background: #4a5568;
-        }
-
         .warning-card {
             background: #f7fafc;
             border-radius: 8px;
@@ -341,40 +332,6 @@
             transition: width 0.3s ease;
         }
 
-        .loading {
-            text-align: center;
-            padding: 40px;
-            color: #718096;
-        }
-
-        .toast {
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            background: #48bb78;
-            color: white;
-            padding: 15px 20px;
-            border-radius: 6px;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-            z-index: 1000;
-            animation: slideIn 0.3s ease;
-        }
-
-        .toast.error {
-            background: #f56565;
-        }
-
-        @keyframes slideIn {
-            from {
-                transform: translateX(400px);
-                opacity: 0;
-            }
-            to {
-                transform: translateX(0);
-                opacity: 1;
-            }
-        }
-
         @media (max-width: 768px) {
             .header {
                 flex-direction: column;
@@ -442,18 +399,13 @@
                     <button class="btn btn-unknown" onclick="annotate('Unknown')">
                         ? Unknown
                     </button>
-                    <button class="btn btn-delete" onclick="deleteAnnotation()">
-                        🗑️ 删除标注
-                    </button>
                     <button class="btn btn-export" onclick="exportAnnotations()">
                         💾 导出标注
                     </button>
                 </div>
             </div>
 
-            <div id="warning-display">
-                <div class="loading">⏳ 加载中...</div>
-            </div>
+            <div id="warning-display"></div>
 
             <div class="keyboard-hint">
                 💡 <strong>快捷键:</strong> 
@@ -462,8 +414,7 @@
                 <kbd>T</kbd> 标记为TP | 
                 <kbd>F</kbd> 标记为FP | 
                 <kbd>U</kbd> 标记为Unknown |
-                <kbd>N</kbd> 跳到下一个未标注 |
-                <kbd>Del</kbd> 删除标注
+                <kbd>N</kbd> 跳到下一个未标注
             </div>
         </div>
     </div>
@@ -471,40 +422,29 @@
     <script>
         let warnings = [];
         let currentIndex = 0;
-        const API_BASE = '';
-
-        // 显示提示消息
-        function showToast(message, isError = false) {
-            const toast = document.createElement('div');
-            toast.className = 'toast' + (isError ? ' error' : '');
-            toast.textContent = message;
-            document.body.appendChild(toast);
-            
-            setTimeout(() => {
-                toast.remove();
-            }, 3000);
-        }
+        let annotations = {};
 
         // 加载数据
         async function loadData() {
             try {
-                const response = await fetch(`${API_BASE}/api/warnings`);
-                const result = await response.json();
+                const response = await fetch('inconsistent_labels.json');
+                warnings = await response.json();
                 
-                if (result.success) {
-                    warnings = result.data;
-                    updateDisplay();
-                    updateStats();
-                } else {
-                    throw new Error(result.error);
+                // 从localStorage加载已有的标注
+                const saved = localStorage.getItem('annotations');
+                if (saved) {
+                    annotations = JSON.parse(saved);
                 }
+                
+                updateDisplay();
+                updateStats();
             } catch (error) {
                 document.getElementById('warning-display').innerHTML = `
                     <div class="no-data">
-                        ❌ 加载数据失败: ${error.message}
+                        ❌ 加载数据失败: ${error.message}<br>
+                        请确保 inconsistent_labels.json 文件存在于同一目录下
                     </div>
                 `;
-                showToast('加载数据失败: ' + error.message, true);
             }
         }
 
@@ -516,7 +456,7 @@
             }
 
             const warning = warnings[currentIndex];
-            const manualLabel = warning.manual_annotation;
+            const manualLabel = annotations[warning.id];
 
             const html = `
                 <div class="warning-card">
@@ -592,7 +532,7 @@
             document.getElementById('current-index').textContent = currentIndex + 1;
             document.getElementById('total-count').textContent = warnings.length;
             
-            const annotatedCount = warnings.filter(w => w.manual_annotation).length;
+            const annotatedCount = Object.keys(annotations).length;
             document.getElementById('annotated-count').textContent = annotatedCount;
             document.getElementById('unannotated-count').textContent = warnings.length - annotatedCount;
         }
@@ -618,99 +558,55 @@
             const start = currentIndex;
             for (let i = 1; i <= warnings.length; i++) {
                 const idx = (start + i) % warnings.length;
-                if (!warnings[idx].manual_annotation) {
+                if (!annotations[warnings[idx].id]) {
                     currentIndex = idx;
                     updateDisplay();
                     updateStats();
                     return;
                 }
             }
-            showToast('所有警告都已标注!');
+            alert('所有警告都已标注!');
         }
 
         // 标注函数
-        async function annotate(label) {
+        function annotate(label) {
             if (warnings.length === 0) return;
             
             const warning = warnings[currentIndex];
+            annotations[warning.id] = label;
             
-            try {
-                const response = await fetch(`${API_BASE}/api/annotate`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        id: warning.id,
-                        label: label
-                    })
-                });
-                
-                const result = await response.json();
-                
-                if (result.success) {
-                    // 更新本地数据
-                    warnings[currentIndex].manual_annotation = label;
-                    updateDisplay();
-                    updateStats();
-                    showToast(`已标记为 ${label}`);
-                    
-                    // 自动跳到下一个
-                    setTimeout(() => {
-                        if (currentIndex < warnings.length - 1) {
-                            navigateNext();
-                        }
-                    }, 300);
-                } else {
-                    throw new Error(result.error);
+            // 保存到localStorage
+            localStorage.setItem('annotations', JSON.stringify(annotations));
+            
+            updateDisplay();
+            updateStats();
+            
+            // 自动跳到下一个
+            setTimeout(() => {
+                if (currentIndex < warnings.length - 1) {
+                    navigateNext();
                 }
-            } catch (error) {
-                showToast('标注失败: ' + error.message, true);
-            }
-        }
-
-        // 删除标注
-        async function deleteAnnotation() {
-            if (warnings.length === 0) return;
-            
-            const warning = warnings[currentIndex];
-            if (!warning.manual_annotation) {
-                showToast('当前警告没有标注', true);
-                return;
-            }
-            
-            if (!confirm('确定要删除这条标注吗?')) {
-                return;
-            }
-            
-            try {
-                const response = await fetch(`${API_BASE}/api/delete_annotation/${warning.id}`, {
-                    method: 'DELETE'
-                });
-                
-                const result = await response.json();
-                
-                if (result.success) {
-                    warnings[currentIndex].manual_annotation = null;
-                    updateDisplay();
-                    updateStats();
-                    showToast('标注已删除');
-                } else {
-                    throw new Error(result.error);
-                }
-            } catch (error) {
-                showToast('删除失败: ' + error.message, true);
-            }
+            }, 300);
         }
 
         // 导出标注
-        async function exportAnnotations() {
-            try {
-                window.location.href = `${API_BASE}/api/export`;
-                showToast('导出成功!');
-            } catch (error) {
-                showToast('导出失败: ' + error.message, true);
-            }
+        function exportAnnotations() {
+            // 合并原始数据和标注
+            const exportData = warnings.map(warning => ({
+                ...warning,
+                manual_annotation: annotations[warning.id] || null
+            }));
+            
+            const dataStr = JSON.stringify(exportData, null, 2);
+            const blob = new Blob([dataStr], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `annotated_warnings_${new Date().toISOString().split('T')[0]}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+            
+            alert(`已导出 ${warnings.length} 条警告，其中 ${Object.keys(annotations).length} 条已标注`);
         }
 
         // HTML转义
@@ -745,9 +641,6 @@
                     break;
                 case 'n':
                     jumpToUnannotated();
-                    break;
-                case 'delete':
-                    deleteAnnotation();
                     break;
             }
         });
