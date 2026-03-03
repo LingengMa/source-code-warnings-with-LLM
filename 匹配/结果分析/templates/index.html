@@ -375,6 +375,81 @@
             }
         }
 
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1001;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            overflow: auto;
+            background-color: rgba(0,0,0,0.5);
+        }
+
+        .modal-content {
+            background-color: #fefefe;
+            margin: 5% auto;
+            padding: 20px;
+            border: 1px solid #888;
+            width: 80%;
+            border-radius: 8px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+            position: relative;
+        }
+
+        .modal-header {
+            padding: 10px 15px;
+            border-bottom: 1px solid #eee;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-title {
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        .close-btn {
+            color: #aaa;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        .close-btn:hover,
+        .close-btn:focus {
+            color: black;
+            text-decoration: none;
+        }
+
+        .modal-body {
+            padding: 15px;
+            max-height: 70vh;
+            overflow-y: auto;
+        }
+
+        #file-content-display {
+            background: #2d3748;
+            color: #e2e8f0;
+            padding: 20px;
+            border-radius: 6px;
+            overflow-x: auto;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            font-size: 13px;
+            line-height: 1.6;
+            white-space: pre;
+        }
+
+        .highlight-line {
+            background-color: rgba(239, 68, 68, 0.3);
+            display: block;
+            margin: 0 -20px;
+            padding: 0 20px;
+            border-left: 4px solid #ef4444;
+        }
+
         @media (max-width: 768px) {
             .header {
                 flex-direction: column;
@@ -468,6 +543,18 @@
         </div>
     </div>
 
+    <div id="file-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title" id="modal-file-path"></h2>
+                <span class="close-btn" onclick="closeFileModal()">&times;</span>
+            </div>
+            <div class="modal-body">
+                <pre id="file-content-display"><div class="loading">⏳ 加载文件中...</div></pre>
+            </div>
+        </div>
+    </div>
+
     <script>
         let warnings = [];
         let currentIndex = 0;
@@ -551,6 +638,16 @@
                             <div class="info-label">规则ID</div>
                             <div class="info-value">${warning.rule_id || 'N/A'}</div>
                         </div>
+                        ${warning.full_file_path ? `
+                        <div class="info-item" style="grid-column: 1 / -1;">
+                            <div class="info-label">文件路径</div>
+                            <div class="info-value">
+                                <a href="#" onclick="event.preventDefault(); showFileContent('${warning.full_file_path}', ${warning.line_number || 0})">
+                                    ${warning.full_file_path}
+                                </a>
+                            </div>
+                        </div>
+                        ` : ''}
                     </div>
 
                     ${warning.message ? `
@@ -720,10 +817,72 @@
             return div.innerHTML;
         }
 
+        // 文件内容显示
+        const fileModal = document.getElementById('file-modal');
+
+        async function showFileContent(filePath, lineNumber) {
+            const lineInfo = lineNumber ? ` (行号: ${lineNumber})` : '';
+            document.getElementById('modal-file-path').textContent = `${filePath}${lineInfo}`;
+            fileModal.style.display = 'block';
+            
+            const contentDisplay = document.getElementById('file-content-display');
+            contentDisplay.innerHTML = '<div class="loading">⏳ 加载文件中...</div>';
+
+            try {
+                const response = await fetch(`${API_BASE}/api/file?path=${encodeURIComponent(filePath)}`);
+                const result = await response.json();
+
+                if (result.success) {
+                    if (lineNumber && lineNumber > 0) {
+                        // 按行分割内容
+                        const lines = result.content.split('\n');
+                        const contentWithHighlight = lines.map((line, index) => {
+                            if (index + 1 === lineNumber) {
+                                // 高亮指定行
+                                return `<span class="highlight-line">${escapeHtml(line)}</span>`;
+                            }
+                            return escapeHtml(line);
+                        }).join('\n');
+                        
+                        contentDisplay.innerHTML = contentWithHighlight;
+
+                        // 滚动到高亮行
+                        setTimeout(() => {
+                            const highlightedLine = contentDisplay.querySelector('.highlight-line');
+                            if (highlightedLine) {
+                                highlightedLine.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                            }
+                        }, 100);
+                    } else {
+                        contentDisplay.textContent = result.content;
+                    }
+                } else {
+                    throw new Error(result.error);
+                }
+            } catch (error) {
+                contentDisplay.innerHTML = `<div style="color: #f56565;">❌ 加载文件失败: ${error.message}</div>`;
+            }
+        }
+
+        function closeFileModal() {
+            fileModal.style.display = 'none';
+        }
+
+        window.onclick = function(event) {
+            if (event.target == fileModal) {
+                closeFileModal();
+            }
+        }
+
         // 键盘快捷键
         document.addEventListener('keydown', (e) => {
-            // 避免在输入框中触发快捷键
-            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
+            // 增加对 Esc 键关闭弹窗的支持
+            if (e.key === 'Escape') {
+                closeFileModal();
+                return;
+            }
+            // 避免在输入框或弹窗中触发快捷键
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || fileModal.style.display === 'block') {
                 return;
             }
             

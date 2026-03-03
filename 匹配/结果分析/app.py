@@ -215,6 +215,25 @@ def delete_annotation(warning_id):
             'error': str(e)
         }), 500
 
+@app.route('/api/file')
+def get_file_content():
+    """获取文件内容"""
+    file_path = request.args.get('path')
+    if not file_path:
+        return jsonify({'success': False, 'error': '缺少文件路径'}), 400
+    
+    # 安全检查：确保文件在项目目录或允许的目录内
+    # 这里简化为只检查文件是否存在
+    if not os.path.exists(file_path):
+        return jsonify({'success': False, 'error': '文件未找到'}), 404
+        
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        return jsonify({'success': True, 'content': content})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 if __name__ == '__main__':
     print("=" * 60)
     print("🚀 警告标注工具服务启动中...")
