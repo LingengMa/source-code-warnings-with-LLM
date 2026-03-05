@@ -1,76 +1,918 @@
 <!DOCTYPE html>
-<html lang="zh">
+<html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>人工标注工具</title>
+    <title>警告标注工具</title>
     <style>
-        body { font-family: sans-serif; margin: 2em; }
-        .container { max-width: 800px; margin: auto; }
-        .code-block { background-color: #f4f4f4; padding: 1em; border: 1px solid #ddd; white-space: pre-wrap; font-family: monospace; max-height: 300px; overflow-y: auto; }
-        .item-details { margin-bottom: 1em; }
-        .item-details p { margin: 0.5em 0; }
-        .buttons { margin-top: 1em; }
-        .buttons button { padding: 0.5em 1em; font-size: 1em; cursor: pointer; margin-right: 10px; }
-        .tp-button { background-color: #4CAF50; color: white; }
-        .fp-button { background-color: #f44336; color: white; }
-        .unknown-button { background-color: #ff9800; color: white; }
-        .progress { margin-bottom: 1em; }
-        .nav-buttons { margin-top: 1em; display: flex; justify-content: space-between; align-items: center; }
-        .manual-label { font-weight: bold; color: #0056b3; }
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 25px 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .header h1 {
+            font-size: 28px;
+            font-weight: 600;
+        }
+
+        .stats {
+            display: flex;
+            gap: 20px;
+            font-size: 14px;
+        }
+
+        .stat-item {
+            background: rgba(255, 255, 255, 0.2);
+            padding: 8px 16px;
+            border-radius: 20px;
+            backdrop-filter: blur(10px);
+        }
+
+        .content {
+            padding: 30px;
+        }
+
+        .controls {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 25px;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+
+        .navigation {
+            display: flex;
+            gap: 10px;
+        }
+
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        }
+
+        .btn:active {
+            transform: translateY(0);
+        }
+
+        .btn-nav {
+            background: #667eea;
+            color: white;
+        }
+
+        .btn-nav:hover {
+            background: #5568d3;
+        }
+
+        .btn-nav:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .btn-jump {
+            background: #48bb78;
+            color: white;
+        }
+
+        .btn-jump:hover {
+            background: #38a169;
+        }
+
+        .annotation-buttons {
+            display: flex;
+            gap: 10px;
+        }
+
+        .btn-tp {
+            background: #48bb78;
+            color: white;
+        }
+
+        .btn-tp:hover {
+            background: #38a169;
+        }
+
+        .btn-fp {
+            background: #f56565;
+            color: white;
+        }
+
+        .btn-fp:hover {
+            background: #e53e3e;
+        }
+
+        .btn-unknown {
+            background: #ed8936;
+            color: white;
+        }
+
+        .btn-unknown:hover {
+            background: #dd6b20;
+        }
+
+        .btn-export {
+            background: #9f7aea;
+            color: white;
+        }
+
+        .btn-export:hover {
+            background: #805ad5;
+        }
+
+        .btn-delete {
+            background: #718096;
+            color: white;
+        }
+
+        .btn-delete:hover {
+            background: #4a5568;
+        }
+
+        .warning-card {
+            background: #f7fafc;
+            border-radius: 8px;
+            padding: 25px;
+            border-left: 4px solid #667eea;
+        }
+
+        .warning-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: start;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+
+        .warning-id {
+            font-size: 24px;
+            font-weight: 600;
+            color: #2d3748;
+        }
+
+        .labels {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .label {
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 13px;
+            font-weight: 600;
+        }
+
+        .label-tp {
+            background: #c6f6d5;
+            color: #22543d;
+        }
+
+        .label-fp {
+            background: #fed7d7;
+            color: #742a2a;
+        }
+
+        .label-unknown {
+            background: #feebc8;
+            color: #7c2d12;
+        }
+
+        .label-llm-tp {
+            background: #bee3f8;
+            color: #2c5282;
+        }
+
+        .label-llm-fp {
+            background: #fbb6ce;
+            color: #702459;
+        }
+
+        .label-manual {
+            background: #d6bcfa;
+            color: #44337a;
+        }
+
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .info-item {
+            background: white;
+            padding: 12px;
+            border-radius: 6px;
+        }
+
+        .info-label {
+            font-size: 12px;
+            color: #718096;
+            margin-bottom: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .info-value {
+            font-size: 14px;
+            color: #2d3748;
+            font-weight: 500;
+        }
+
+        .code-section {
+            margin-top: 20px;
+        }
+
+        .section-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: #2d3748;
+            margin-bottom: 10px;
+        }
+
+        .code-block {
+            background: #2d3748;
+            color: #e2e8f0;
+            padding: 20px;
+            border-radius: 6px;
+            overflow-x: auto;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            font-size: 13px;
+            line-height: 1.6;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        .message-box {
+            background: #fff5f5;
+            border-left: 4px solid #f56565;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 15px;
+        }
+
+        .reason-box {
+            background: #f0fff4;
+            border-left: 4px solid #48bb78;
+            padding: 15px;
+            border-radius: 6px;
+            margin-top: 15px;
+        }
+
+        .keyboard-hint {
+            background: #edf2f7;
+            padding: 12px 20px;
+            border-radius: 6px;
+            font-size: 13px;
+            color: #4a5568;
+            margin-top: 20px;
+        }
+
+        .keyboard-hint kbd {
+            background: white;
+            padding: 2px 8px;
+            border-radius: 3px;
+            border: 1px solid #cbd5e0;
+            font-family: monospace;
+            font-size: 12px;
+            margin: 0 2px;
+        }
+
+        .no-data {
+            text-align: center;
+            padding: 60px 20px;
+            color: #718096;
+            font-size: 18px;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 4px;
+            background: #e2e8f0;
+            border-radius: 2px;
+            overflow: hidden;
+            margin-bottom: 20px;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            transition: width 0.3s ease;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #718096;
+        }
+
+        .toast {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: #48bb78;
+            color: white;
+            padding: 15px 20px;
+            border-radius: 6px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            z-index: 1000;
+            animation: slideIn 0.3s ease;
+        }
+
+        .toast.error {
+            background: #f56565;
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateX(400px);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1001;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            overflow: auto;
+            background-color: rgba(0,0,0,0.5);
+        }
+
+        .modal-content {
+            background-color: #fefefe;
+            margin: 5% auto;
+            padding: 20px;
+            border: 1px solid #888;
+            width: 80%;
+            border-radius: 8px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+            position: relative;
+        }
+
+        .modal-header {
+            padding: 10px 15px;
+            border-bottom: 1px solid #eee;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-title {
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        .close-btn {
+            color: #aaa;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        .close-btn:hover,
+        .close-btn:focus {
+            color: black;
+            text-decoration: none;
+        }
+
+        .modal-body {
+            padding: 15px;
+            max-height: 70vh;
+            overflow-y: auto;
+        }
+
+        #file-content-display {
+            background: #2d3748;
+            color: #e2e8f0;
+            padding: 20px;
+            border-radius: 6px;
+            overflow-x: auto;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            font-size: 13px;
+            line-height: 1.6;
+            white-space: pre;
+        }
+
+        .highlight-line {
+            background-color: rgba(239, 68, 68, 0.3);
+            display: block;
+            margin: 0 -20px;
+            padding: 0 20px;
+            border-left: 4px solid #ef4444;
+        }
+
+        @media (max-width: 768px) {
+            .header {
+                flex-direction: column;
+                gap: 15px;
+            }
+
+            .controls {
+                flex-direction: column;
+            }
+
+            .navigation, .annotation-buttons {
+                width: 100%;
+                flex-direction: column;
+            }
+
+            .btn {
+                width: 100%;
+                justify-content: center;
+            }
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>人工标注工具</h1>
-        <div class="progress">
-            <p>进度: {{ index + 1 }} / {{ total }}</p>
-        </div>
-        <div class="item-details">
-            <p><strong>ID:</strong> {{ item.id }}</p>
-            {% if item.manual_label %}
-            <p><strong>当前人工标注:</strong> <span class="manual-label">{{ item.manual_label }}</span></p>
-            {% endif %}
-            <p><strong>LLM Label:</strong> {{ item.llm_label }}</p>
-            <p><strong>LLM Label Reason:</strong> {{ item.llm_label_reason }}</p>
-            <p><strong>Tool Name:</strong> {{ item.tool_name }}</p>
-            <p><strong>Project:</strong> {{ item.project_name_with_version }}</p>
-            <p><strong>Line:</strong> {{ item.line_number }}</p>
-            <p><strong>Function:</strong> {{ item.function_name }}</p>
-            <p><strong>Rule ID:</strong> {{ item.rule_id }}</p>
-            <p><strong>Message:</strong> {{ item.message }}</p>
-            <p><strong>Original Label:</strong> {{ item.label }}</p>
-            <p><strong>Sliced Code:</strong></p>
-            <div class="code-block">
-                {% if item.sliced_code is string %}
-                    {{ item.sliced_code }}
-                {% else %}
-                    {{ '\n'.join(item.sliced_code) }}
-                {% endif %}
+        <div class="header">
+            <h1>🔍 警告标注工具</h1>
+            <div class="stats">
+                <div class="stat-item">
+                    <span id="current-index">0</span> / <span id="total-count">0</span>
+                </div>
+                <div class="stat-item">
+                    已标注: <span id="annotated-count">0</span>
+                </div>
+                <div class="stat-item">
+                    未标注: <span id="unannotated-count">0</span>
+                </div>
             </div>
         </div>
-        <div class="buttons">
-            <form action="{{ url_for('label') }}" method="post" style="display: inline;">
-                <input type="hidden" name="id" value="{{ item.id }}">
-                <input type="hidden" name="current_index" value="{{ index }}">
-                <button type="submit" name="label" value="TP" class="tp-button">标注为 TP</button>
-            </form>
-            <form action="{{ url_for('label') }}" method="post" style="display: inline;">
-                <input type="hidden" name="id" value="{{ item.id }}">
-                <input type="hidden" name="current_index" value="{{ index }}">
-                <button type="submit" name="label" value="FP" class="fp-button">标注为 FP</button>
-            </form>
-            <form action="{{ url_for('label') }}" method="post" style="display: inline;">
-                <input type="hidden" name="id" value="{{ item.id }}">
-                <input type="hidden" name="current_index" value="{{ index }}">
-                <button type="submit" name="label" value="Unknown" class="unknown-button">标注为 Unknown</button>
-            </form>
-        </div>
-        <div class="nav-buttons">
-            <a href="{{ url_for('nav', direction='prev') }}">上一个</a>
-            <a href="{{ url_for('nav', direction='first_unlabeled') }}">下一个未标注</a>
-            <a href="{{ url_for('nav', direction='next') }}">下一个</a>
+
+        <div class="content">
+            <div class="progress-bar">
+                <div class="progress-fill" id="progress-fill"></div>
+            </div>
+
+            <div class="controls">
+                <div class="navigation">
+                    <button class="btn btn-nav" id="btn-prev" onclick="navigatePrev()">
+                        ← 上一个 (A)
+                    </button>
+                    <button class="btn btn-nav" id="btn-next" onclick="navigateNext()">
+                        下一个 (D) →
+                    </button>
+                    <button class="btn btn-jump" onclick="jumpToUnannotated()">
+                        ⏭ 跳到下一个未标注
+                    </button>
+                </div>
+
+                <div class="annotation-buttons">
+                    <button class="btn btn-tp" onclick="annotate('TP')">
+                        ✓ TP (真阳性)
+                    </button>
+                    <button class="btn btn-fp" onclick="annotate('FP')">
+                        ✗ FP (假阳性)
+                    </button>
+                    <button class="btn btn-unknown" onclick="annotate('Unknown')">
+                        ? Unknown
+                    </button>
+                    <button class="btn btn-delete" onclick="deleteAnnotation()">
+                        🗑️ 删除标注
+                    </button>
+                    <button class="btn btn-export" onclick="exportAnnotations()">
+                        💾 导出标注
+                    </button>
+                </div>
+            </div>
+
+            <div id="warning-display">
+                <div class="loading">⏳ 加载中...</div>
+            </div>
+
+            <div class="keyboard-hint">
+                💡 <strong>快捷键:</strong> 
+                <kbd>A</kbd> 上一个 | 
+                <kbd>D</kbd> 下一个 | 
+                <kbd>T</kbd> 标记为TP | 
+                <kbd>F</kbd> 标记为FP | 
+                <kbd>U</kbd> 标记为Unknown |
+                <kbd>N</kbd> 跳到下一个未标注 |
+                <kbd>Del</kbd> 删除标注
+            </div>
         </div>
     </div>
+
+    <div id="file-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title" id="modal-file-path"></h2>
+                <span class="close-btn" onclick="closeFileModal()">&times;</span>
+            </div>
+            <div class="modal-body">
+                <pre id="file-content-display"><div class="loading">⏳ 加载文件中...</div></pre>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let warnings = [];
+        let currentIndex = 0;
+        const API_BASE = '';
+
+        // 显示提示消息
+        function showToast(message, isError = false) {
+            const toast = document.createElement('div');
+            toast.className = 'toast' + (isError ? ' error' : '');
+            toast.textContent = message;
+            document.body.appendChild(toast);
+            
+            setTimeout(() => {
+                toast.remove();
+            }, 3000);
+        }
+
+        // 加载数据
+        async function loadData() {
+            try {
+                const response = await fetch(`${API_BASE}/api/warnings`);
+                const result = await response.json();
+                
+                if (result.success) {
+                    warnings = result.data;
+                    updateDisplay();
+                    updateStats();
+                } else {
+                    throw new Error(result.error);
+                }
+            } catch (error) {
+                document.getElementById('warning-display').innerHTML = `
+                    <div class="no-data">
+                        ❌ 加载数据失败: ${error.message}
+                    </div>
+                `;
+                showToast('加载数据失败: ' + error.message, true);
+            }
+        }
+
+        // 更新显示
+        function updateDisplay() {
+            if (warnings.length === 0) {
+                document.getElementById('warning-display').innerHTML = '<div class="no-data">📭 暂无数据</div>';
+                return;
+            }
+
+            const warning = warnings[currentIndex];
+            const manualLabel = warning.manual_annotation;
+
+            const html = `
+                <div class="warning-card">
+                    <div class="warning-header">
+                        <div class="warning-id">警告 #${warning.id}</div>
+                        <div class="labels">
+                            ${warning.label ? `<span class="label label-${warning.label.toLowerCase()}">原始标签: ${warning.label}</span>` : ''}
+                            ${warning.llm_label ? `<span class="label label-llm-${warning.llm_label.toLowerCase()}">LLM标签: ${warning.llm_label}</span>` : ''}
+                            ${manualLabel ? `<span class="label label-manual">人工标注: ${manualLabel}</span>` : ''}
+                            ${warning.inconsistency_type ? `<span class="label" style="background: #faf089; color: #744210;">不一致: ${warning.inconsistency_type}</span>` : ''}
+                        </div>
+                    </div>
+
+                    <div class="info-grid">
+                        <div class="info-item">
+                            <div class="info-label">工具名称</div>
+                            <div class="info-value">${warning.tool_name || 'N/A'}</div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">项目</div>
+                            <div class="info-value">${warning.project_name_with_version || 'N/A'}</div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">函数名</div>
+                            <div class="info-value">${warning.function_name || 'N/A'}</div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">行号</div>
+                            <div class="info-value">${warning.line_number || 'N/A'}</div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">规则ID</div>
+                            <div class="info-value">${warning.rule_id || 'N/A'}</div>
+                        </div>
+                        ${warning.full_file_path ? `
+                        <div class="info-item" style="grid-column: 1 / -1;">
+                            <div class="info-label">文件路径</div>
+                            <div class="info-value">
+                                <a href="#" onclick="event.preventDefault(); showFileContent('${warning.full_file_path}', ${warning.line_number || 0})">
+                                    ${warning.full_file_path}
+                                </a>
+                            </div>
+                        </div>
+                        ` : ''}
+                    </div>
+
+                    ${warning.message ? `
+                        <div class="message-box">
+                            <div class="section-title">⚠️ 警告消息</div>
+                            <div>${escapeHtml(warning.message)}</div>
+                        </div>
+                    ` : ''}
+
+                    ${warning.llm_label_reason ? `
+                        <div class="reason-box">
+                            <div class="section-title">🤖 LLM 分析原因</div>
+                            <div>${escapeHtml(warning.llm_label_reason)}</div>
+                        </div>
+                    ` : ''}
+
+                    ${warning.sliced_code ? `
+                        <div class="code-section">
+                            <div class="section-title">📄 代码片段</div>
+                            <div class="code-block">${escapeHtml(warning.sliced_code)}</div>
+                        </div>
+                    ` : ''}
+                </div>
+            `;
+
+            document.getElementById('warning-display').innerHTML = html;
+            
+            // 更新按钮状态
+            document.getElementById('btn-prev').disabled = currentIndex === 0;
+            document.getElementById('btn-next').disabled = currentIndex === warnings.length - 1;
+            
+            // 更新进度条
+            const progress = ((currentIndex + 1) / warnings.length) * 100;
+            document.getElementById('progress-fill').style.width = progress + '%';
+        }
+
+        // 更新统计信息
+        function updateStats() {
+            document.getElementById('current-index').textContent = currentIndex + 1;
+            document.getElementById('total-count').textContent = warnings.length;
+            
+            const annotatedCount = warnings.filter(w => w.manual_annotation).length;
+            document.getElementById('annotated-count').textContent = annotatedCount;
+            document.getElementById('unannotated-count').textContent = warnings.length - annotatedCount;
+        }
+
+        // 导航函数
+        function navigatePrev() {
+            if (currentIndex > 0) {
+                currentIndex--;
+                updateDisplay();
+                updateStats();
+            }
+        }
+
+        function navigateNext() {
+            if (currentIndex < warnings.length - 1) {
+                currentIndex++;
+                updateDisplay();
+                updateStats();
+            }
+        }
+
+        function jumpToUnannotated() {
+            const start = currentIndex;
+            for (let i = 1; i <= warnings.length; i++) {
+                const idx = (start + i) % warnings.length;
+                if (!warnings[idx].manual_annotation) {
+                    currentIndex = idx;
+                    updateDisplay();
+                    updateStats();
+                    return;
+                }
+            }
+            showToast('所有警告都已标注!');
+        }
+
+        // 标注函数
+        async function annotate(label) {
+            if (warnings.length === 0) return;
+            
+            const warning = warnings[currentIndex];
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/annotate`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        id: warning.id,
+                        label: label
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    // 更新本地数据
+                    warnings[currentIndex].manual_annotation = label;
+                    updateDisplay();
+                    updateStats();
+                    showToast(`已标记为 ${label}`);
+                    
+                    // 自动跳到下一个
+                    setTimeout(() => {
+                        if (currentIndex < warnings.length - 1) {
+                            navigateNext();
+                        }
+                    }, 300);
+                } else {
+                    throw new Error(result.error);
+                }
+            } catch (error) {
+                showToast('标注失败: ' + error.message, true);
+            }
+        }
+
+        // 删除标注
+        async function deleteAnnotation() {
+            if (warnings.length === 0) return;
+            
+            const warning = warnings[currentIndex];
+            if (!warning.manual_annotation) {
+                showToast('当前警告没有标注', true);
+                return;
+            }
+            
+            if (!confirm('确定要删除这条标注吗?')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/delete_annotation/${warning.id}`, {
+                    method: 'DELETE'
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    warnings[currentIndex].manual_annotation = null;
+                    updateDisplay();
+                    updateStats();
+                    showToast('标注已删除');
+                } else {
+                    throw new Error(result.error);
+                }
+            } catch (error) {
+                showToast('删除失败: ' + error.message, true);
+            }
+        }
+
+        // 导出标注
+        async function exportAnnotations() {
+            try {
+                window.location.href = `${API_BASE}/api/export`;
+                showToast('导出成功!');
+            } catch (error) {
+                showToast('导出失败: ' + error.message, true);
+            }
+        }
+
+        // HTML转义
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // 文件内容显示
+        const fileModal = document.getElementById('file-modal');
+
+        async function showFileContent(filePath, lineNumber) {
+            const lineInfo = lineNumber ? ` (行号: ${lineNumber})` : '';
+            document.getElementById('modal-file-path').textContent = `${filePath}${lineInfo}`;
+            fileModal.style.display = 'block';
+            
+            const contentDisplay = document.getElementById('file-content-display');
+            contentDisplay.innerHTML = '<div class="loading">⏳ 加载文件中...</div>';
+
+            try {
+                const response = await fetch(`${API_BASE}/api/file?path=${encodeURIComponent(filePath)}`);
+                const result = await response.json();
+
+                if (result.success) {
+                    if (lineNumber && lineNumber > 0) {
+                        // 按行分割内容
+                        const lines = result.content.split('\n');
+                        const contentWithHighlight = lines.map((line, index) => {
+                            if (index + 1 === lineNumber) {
+                                // 高亮指定行
+                                return `<span class="highlight-line">${escapeHtml(line)}</span>`;
+                            }
+                            return escapeHtml(line);
+                        }).join('\n');
+                        
+                        contentDisplay.innerHTML = contentWithHighlight;
+
+                        // 滚动到高亮行
+                        setTimeout(() => {
+                            const highlightedLine = contentDisplay.querySelector('.highlight-line');
+                            if (highlightedLine) {
+                                highlightedLine.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                            }
+                        }, 100);
+                    } else {
+                        contentDisplay.textContent = result.content;
+                    }
+                } else {
+                    throw new Error(result.error);
+                }
+            } catch (error) {
+                contentDisplay.innerHTML = `<div style="color: #f56565;">❌ 加载文件失败: ${error.message}</div>`;
+            }
+        }
+
+        function closeFileModal() {
+            fileModal.style.display = 'none';
+        }
+
+        window.onclick = function(event) {
+            if (event.target == fileModal) {
+                closeFileModal();
+            }
+        }
+
+        // 键盘快捷键
+        document.addEventListener('keydown', (e) => {
+            // 增加对 Esc 键关闭弹窗的支持
+            if (e.key === 'Escape') {
+                closeFileModal();
+                return;
+            }
+            // 避免在输入框或弹窗中触发快捷键
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || fileModal.style.display === 'block') {
+                return;
+            }
+            
+            switch(e.key.toLowerCase()) {
+                case 'a':
+                    navigatePrev();
+                    break;
+                case 'd':
+                    navigateNext();
+                    break;
+                case 't':
+                    annotate('TP');
+                    break;
+                case 'f':
+                    annotate('FP');
+                    break;
+                case 'u':
+                    annotate('Unknown');
+                    break;
+                case 'n':
+                    jumpToUnannotated();
+                    break;
+                case 'delete':
+                    deleteAnnotation();
+                    break;
+            }
+        });
+
+        // 页面加载时初始化
+        loadData();
+    </script>
 </body>
 </html>

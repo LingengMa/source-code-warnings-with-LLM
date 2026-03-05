@@ -1,9 +1,61 @@
 import json
+import argparse
 from openai import OpenAI
 import os
-from prompt import PROMPT_TEMPLATE
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+"""
+# 模式1：三分类 + 无 label
+python llm.py --mode with_unknown_without_label
+
+# 模式2：二分类 + 无 label
+python llm.py --mode without_unknown_without_label
+
+# 模式3：三分类 + 有 label
+python llm.py --mode with_unknown_with_label
+
+# 模式4：二分类 + 有 label
+python llm.py --mode without_unknown_with_label
+"""
+
+
+# ──────────────────────────────────────────────
+# 四种模式配置表
+# mode 名称 → (prompt模块, 输入文件, 输出文件)
+# ──────────────────────────────────────────────
+UNIFIED_INPUT = "input/slices_for_llm_with_label.json"
+
+MODES = {
+    "with_unknown_without_label": {
+        "prompt_module": "prompts.prompt_with_unknown_without_label",
+        "input_file":    UNIFIED_INPUT,
+        "output_file":   "output/results_with_unknown_without_label.json",
+        "description":   "三分类(TP/FP/Unknown)，不含算法参考标签",
+        "strip_label":   True,   # 发送给LLM前剔除 label 字段
+    },
+    "without_unknown_without_label": {
+        "prompt_module": "prompts.prompt_without_unknown_without_label",
+        "input_file":    UNIFIED_INPUT,
+        "output_file":   "output/results_without_unknown_without_label.json",
+        "description":   "二分类(TP/FP)，不含算法参考标签",
+        "strip_label":   True,
+    },
+    "with_unknown_with_label": {
+        "prompt_module": "prompts.prompt_with_unknown_with_label",
+        "input_file":    UNIFIED_INPUT,
+        "output_file":   "output/results_with_unknown_with_label.json",
+        "description":   "三分类(TP/FP/Unknown)，含算法参考标签",
+        "strip_label":   False,
+    },
+    "without_unknown_with_label": {
+        "prompt_module": "prompts.prompt_without_unknown_with_label",
+        "input_file":    UNIFIED_INPUT,
+        "output_file":   "output/results_without_unknown_with_label.json",
+        "description":   "二分类(TP/FP)，含算法参考标签",
+        "strip_label":   False,
+    },
+}
 
 # 配置API密钥（从环境变量获取）
 client = OpenAI(
@@ -11,34 +63,36 @@ client = OpenAI(
     base_url="https://api.deepseek.com"
 )
 
-def process_data_with_llm(data, retries=3, retry_delay=5):
+
+def process_data_with_llm(data, prompt_template, strip_label=False, retries=3, retry_delay=5):
     """
-    使用LLM处理单条数据，包含重试机制
+    使用LLM处理单条数据，包含重试机制。
+    strip_label=True 时，发送给LLM的数据中剔除 label 字段，但结果中仍保留原始 label。
     """
-    # 构造发送给LLM的完整提示词
-    prompt = PROMPT_TEMPLATE + json.dumps(data, indent=2, ensure_ascii=False)
-    
+    # 构造发给 LLM 的数据（按需剔除 label）
+    data_for_llm = {k: v for k, v in data.items() if not (strip_label and k == "label")}
+    prompt = prompt_template + json.dumps(data_for_llm, indent=2, ensure_ascii=False)
+
     for attempt in range(retries):
         try:
             response = client.chat.completions.create(
-                model="deepseek-chat",  # 或 "deepseek-coder"
+                model="deepseek-chat",
                 messages=[
                     {"role": "user", "content": prompt}
                 ],
                 stream=False,
-                temperature=0.1, # 设置较低的温度以获得更稳定的输出
+                temperature=0.1,
             )
-            
+
             llm_output = response.choices[0].message.content
-            # 尝试解析LLM返回的JSON
             result = json.loads(llm_output)
-            # 合并原始数据和LLM的返回结果
+            # 合并完整原始数据（含 label）到结果中
             result.update(data)
-            return result # 成功则返回结果
+            return result
 
         except json.JSONDecodeError:
             print(f"警告：ID {data.get('id')} 无法解析LLM返回的JSON，将不会重试。原始输出: {llm_output}")
-            return None # JSON解析错误通常不是临时问题，直接返回None
+            return None
         except Exception as e:
             print(f"错误：ID {data.get('id')} 调用API时出错: {e}。正在进行第 {attempt + 1}/{retries} 次重试...")
             if attempt < retries - 1:
@@ -48,20 +102,40 @@ def process_data_with_llm(data, retries=3, retry_delay=5):
                 return None
     return None
 
-def main():
+
+def run(mode: str):
     """
-    主函数，用于读取数据、处理并保存结果
+    主运行函数，根据指定模式读取数据、处理并保存结果
     """
-    input_filepath = 'input/data_for_llm.json'
-    output_filepath = 'output/llm_results.json'
+    if mode not in MODES:
+        print(f"错误：未知模式 '{mode}'，可用模式：{list(MODES.keys())}")
+        return
+
+    cfg = MODES[mode]
+    print(f"\n{'='*60}")
+    print(f"运行模式：{mode}")
+    print(f"描述：{cfg['description']}")
+    print(f"输入：{cfg['input_file']}")
+    print(f"输出：{cfg['output_file']}")
+    print(f"{'='*60}\n")
+
+    # 动态加载对应的提示词模板
+    import importlib
+    prompt_mod = importlib.import_module(cfg["prompt_module"])
+    prompt_template = prompt_mod.PROMPT_TEMPLATE
+    strip_label = cfg["strip_label"]
+
+    input_filepath  = cfg["input_file"]
+    output_filepath = cfg["output_file"]
+
+    # 确保输出目录存在
+    output_dir = os.path.dirname(output_filepath)
+    if output_dir and not os.path.exists(output_dir):
+        os.makedirs(output_dir)
 
     # 读取输入数据
     with open(input_filepath, 'r', encoding='utf-8') as f:
         input_data = json.load(f)
-
-    # 为每条数据添加一个唯一的ID
-    for i, data_item in enumerate(input_data):
-        data_item['id'] = i + 1
 
     results = []
     processed_ids = set()
@@ -71,7 +145,7 @@ def main():
         try:
             with open(output_filepath, 'r', encoding='utf-8') as f:
                 results = json.load(f)
-                processed_ids = {item['id'] for item in results}
+                processed_ids = {item['id'] for item in results if 'id' in item}
                 print(f"已加载 {len(results)} 条已有结果，将从断点处继续。")
         except (json.JSONDecodeError, IOError) as e:
             print(f"警告：无法加载或解析现有结果文件，将重新开始。错误: {e}")
@@ -79,20 +153,22 @@ def main():
             processed_ids = set()
 
     # 过滤掉已处理的数据
-    tasks_to_process = [item for item in input_data if item['id'] not in processed_ids]
-    
+    tasks_to_process = [item for item in input_data if item.get('id') not in processed_ids]
+
     if not tasks_to_process:
         print("所有数据均已处理完毕。")
         return
 
     total_tasks = len(tasks_to_process)
     print(f"共有 {total_tasks} 条新数据待处理。")
-    
+
     processed_count = 0
 
-    with ThreadPoolExecutor(max_workers=4) as executor:
-        # 提交任务
-        future_to_data = {executor.submit(process_data_with_llm, data_item): data_item for data_item in tasks_to_process}
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        future_to_data = {
+            executor.submit(process_data_with_llm, data_item, prompt_template, strip_label): data_item
+            for data_item in tasks_to_process
+        }
 
         for future in as_completed(future_to_data):
             data_item = future_to_data[future]
@@ -102,24 +178,44 @@ def main():
                     results.append(result)
                     print(f"处理成功: ID {result['id']}")
                 else:
-                    print(f"处理失败: ID {data_item['id']}")
-                
+                    print(f"处理失败: ID {data_item.get('id')}")
+
                 processed_count += 1
-                
+
                 # 每处理10条数据保存一次
                 if processed_count % 10 == 0:
                     with open(output_filepath, 'w', encoding='utf-8') as f:
-                        json.dump(results, f, indent=2, ensure_ascii=False)
+                        json.dump(sorted(results, key=lambda x: x.get('id', 0)), f, indent=2, ensure_ascii=False)
                     print(f"--- 进度已保存：已处理 {processed_count}/{total_tasks} ---")
 
             except Exception as exc:
-                print(f"ID {data_item['id']} 在处理时产生异常: {exc}")
+                print(f"ID {data_item.get('id')} 在处理时产生异常: {exc}")
 
-    # 最终保存所有结果
+    # 最终保存所有结果（按 id 排序）
     with open(output_filepath, 'w', encoding='utf-8') as f:
-        json.dump(results, f, indent=2, ensure_ascii=False)
+        json.dump(sorted(results, key=lambda x: x.get('id', 0)), f, indent=2, ensure_ascii=False)
 
     print(f"\n处理完成！总共 {len(results)} 条结果已保存到 {output_filepath}")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="静态分析告警LLM分类工具",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="\n可用模式：\n" + "\n".join(
+            f"  {k:<40} {v['description']}" for k, v in MODES.items()
+        )
+    )
+    parser.add_argument(
+        "--mode",
+        type=str,
+        choices=list(MODES.keys()),
+        required=True,
+        help="运行模式，决定使用哪套提示词和输入/输出文件"
+    )
+    args = parser.parse_args()
+    run(args.mode)
+
 
 if __name__ == "__main__":
     main()

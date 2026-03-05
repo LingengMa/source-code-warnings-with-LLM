@@ -1,118 +1,248 @@
-from flask import Flask, render_template, request, redirect, url_for
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+警告标注工具 - Flask Web服务
+"""
+
+from flask import Flask, render_template, jsonify, request, send_file
+from flask_cors import CORS
 import json
 import os
+from datetime import datetime
 
 app = Flask(__name__)
+CORS(app)
 
-# 定义文件路径
-INPUT_JSON = 'output/formatted_inconsistent_labels.json'
-OUTPUT_JSON = 'output/manual_labeled_data.json'
-PROGRESS_FILE = 'output/progress.json'
+# 配置文件路径
+DATA_FILE = 'inconsistent_labels.json'
+ANNOTATIONS_FILE = 'annotations.json'
 
-# --- 数据加载与保存 ---
+def load_warnings():
+    """加载警告数据"""
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return []
 
-def load_source_data():
-    """加载原始数据"""
-    with open(INPUT_JSON, 'r', encoding='utf-8') as f:
-        return json.load(f)
+def load_annotations():
+    """加载标注数据"""
+    if os.path.exists(ANNOTATIONS_FILE):
+        with open(ANNOTATIONS_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return {}
 
-def load_labeled_data():
-    """加载已标注的数据到字典中，以ID为键"""
-    if not os.path.exists(OUTPUT_JSON):
-        return {}
-    with open(OUTPUT_JSON, 'r', encoding='utf-8') as f:
-        try:
-            labeled_list = json.load(f)
-            return {item['id']: item for item in labeled_list}
-        except (json.JSONDecodeError, TypeError):
-            return {}
-
-def save_labeled_data(labeled_dict):
-    """将标注数据字典转换回列表并保存"""
-    with open(OUTPUT_JSON, 'w', encoding='utf-8') as f:
-        # 按ID排序，保持文件内容稳定
-        sorted_list = sorted(labeled_dict.values(), key=lambda x: x['id'])
-        json.dump(sorted_list, f, indent=2, ensure_ascii=False)
-
-def save_progress(index):
-    """保存当前浏览的索引"""
-    with open(PROGRESS_FILE, 'w', encoding='utf-8') as f:
-        json.dump({'current_index': index}, f)
-
-def load_progress():
-    """加载进度"""
-    if not os.path.exists(PROGRESS_FILE):
-        return None
-    with open(PROGRESS_FILE, 'r', encoding='utf-8') as f:
-        try:
-            return json.load(f).get('current_index', 0)
-        except json.JSONDecodeError:
-            return None
-
-def find_first_unlabeled_index(source, labeled):
-    """查找第一个未被标注的条目的索引"""
-    for i, item in enumerate(source):
-        if item['id'] not in labeled:
-            return i
-    return 0 # 如果都标完了，从头开始
-
-# --- 初始化 ---
-
-source_data = load_source_data()
-labeled_data_dict = load_labeled_data()
-
-# --- 路由 ---
+def save_annotations(annotations):
+    """保存标注数据"""
+    with open(ANNOTATIONS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(annotations, f, ensure_ascii=False, indent=2)
 
 @app.route('/')
 def index():
-    current_index = load_progress()
-    if current_index is None:
-        current_index = find_first_unlabeled_index(source_data, labeled_data_dict)
-        save_progress(current_index)
+    """主页"""
+    return render_template('index.html')
 
-    if not 0 <= current_index < len(source_data):
-        return "<h1>索引无效。</h1>"
-    
-    item = source_data[current_index].copy()
-    if item['id'] in labeled_data_dict:
-        item['manual_label'] = labeled_data_dict[item['id']].get('manual_label')
+@app.route('/api/warnings')
+def get_warnings():
+    """获取所有警告数据"""
+    try:
+        warnings = load_warnings()
+        annotations = load_annotations()
+        
+        # 合并标注数据到警告中
+        for warning in warnings:
+            warning_id = str(warning['id'])
+            if warning_id in annotations:
+                warning['manual_annotation'] = annotations[warning_id]
+        
+        return jsonify({
+            'success': True,
+            'data': warnings,
+            'total': len(warnings)
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
 
-    return render_template('index.html', item=item, index=current_index, total=len(source_data))
+@app.route('/api/annotations', methods=['GET'])
+def get_annotations():
+    """获取所有标注"""
+    try:
+        annotations = load_annotations()
+        return jsonify({
+            'success': True,
+            'data': annotations
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
 
-@app.route('/label', methods=['POST'])
-def label():
-    item_id = int(request.form['id'])
-    manual_label = request.form['label']
-    current_index = int(request.form.get('current_index', 0))
-    
-    item_to_label = next((item for item in source_data if item['id'] == item_id), None)
-    
-    if item_to_label:
-        labeled_item = item_to_label.copy()
-        labeled_item['manual_label'] = manual_label
-        labeled_data_dict[item_id] = labeled_item
-        save_labeled_data(labeled_data_dict)
-            
-    # 自动前进到下一个
-    next_index = min(current_index + 1, len(source_data) - 1)
-    save_progress(next_index)
-    
-    return redirect(url_for('index'))
+@app.route('/api/annotate', methods=['POST'])
+def annotate():
+    """添加或更新标注"""
+    try:
+        data = request.get_json()
+        warning_id = str(data.get('id'))
+        label = data.get('label')
+        
+        if not warning_id or not label:
+            return jsonify({
+                'success': False,
+                'error': '缺少必要参数'
+            }), 400
+        
+        # 加载现有标注
+        annotations = load_annotations()
+        
+        # 更新标注
+        annotations[warning_id] = {
+            'label': label,
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        # 保存
+        save_annotations(annotations)
+        
+        return jsonify({
+            'success': True,
+            'message': '标注成功'
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
 
-@app.route('/nav', methods=['GET'])
-def nav():
-    direction = request.args.get('direction')
-    current_index = load_progress() or 0
-    
-    if direction == 'prev':
-        current_index = max(0, current_index - 1)
-    elif direction == 'next':
-        current_index = min(len(source_data) - 1, current_index + 1)
-    elif direction == 'first_unlabeled':
-        current_index = find_first_unlabeled_index(source_data, labeled_data_dict)
+@app.route('/api/export')
+def export_data():
+    """导出标注数据"""
+    try:
+        warnings = load_warnings()
+        annotations = load_annotations()
+        
+        # 合并数据
+        export_data = []
+        for warning in warnings:
+            warning_copy = warning.copy()
+            warning_id = str(warning['id'])
+            if warning_id in annotations:
+                warning_copy['manual_annotation'] = annotations[warning_id]['label']
+                warning_copy['annotation_timestamp'] = annotations[warning_id]['timestamp']
+            else:
+                warning_copy['manual_annotation'] = None
+                warning_copy['annotation_timestamp'] = None
+            export_data.append(warning_copy)
+        
+        # 生成文件名
+        filename = f'annotated_warnings_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json'
+        filepath = os.path.join('/tmp', filename)
+        
+        # 保存到临时文件
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(export_data, f, ensure_ascii=False, indent=2)
+        
+        return send_file(
+            filepath,
+            mimetype='application/json',
+            as_attachment=True,
+            download_name=filename
+        )
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
 
-    save_progress(current_index)
-    return redirect(url_for('index'))
+@app.route('/api/stats')
+def get_stats():
+    """获取统计信息"""
+    try:
+        warnings = load_warnings()
+        annotations = load_annotations()
+        
+        # 统计不同标签的数量
+        stats = {
+            'total': len(warnings),
+            'annotated': len(annotations),
+            'unannotated': len(warnings) - len(annotations),
+            'labels': {
+                'TP': 0,
+                'FP': 0,
+                'Unknown': 0
+            }
+        }
+        
+        for ann in annotations.values():
+            label = ann.get('label')
+            if label in stats['labels']:
+                stats['labels'][label] += 1
+        
+        return jsonify({
+            'success': True,
+            'data': stats
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/api/delete_annotation/<int:warning_id>', methods=['DELETE'])
+def delete_annotation(warning_id):
+    """删除标注"""
+    try:
+        annotations = load_annotations()
+        warning_id_str = str(warning_id)
+        
+        if warning_id_str in annotations:
+            del annotations[warning_id_str]
+            save_annotations(annotations)
+            return jsonify({
+                'success': True,
+                'message': '标注已删除'
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': '标注不存在'
+            }), 404
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/api/file')
+def get_file_content():
+    """获取文件内容"""
+    file_path = request.args.get('path')
+    if not file_path:
+        return jsonify({'success': False, 'error': '缺少文件路径'}), 400
+    
+    # 安全检查：确保文件在项目目录或允许的目录内
+    # 这里简化为只检查文件是否存在
+    if not os.path.exists(file_path):
+        return jsonify({'success': False, 'error': '文件未找到'}), 404
+        
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        return jsonify({'success': True, 'content': content})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    print("=" * 60)
+    print("🚀 警告标注工具服务启动中...")
+    print("=" * 60)
+    print(f"📂 数据文件: {DATA_FILE}")
+    print(f"💾 标注文件: {ANNOTATIONS_FILE}")
+    print(f"🌐 访问地址: http://localhost:5000")
+    print("=" * 60)
+    print("按 Ctrl+C 停止服务")
+    print("=" * 60)
+    
+    app.run(debug=True, host='0.0.0.0', port=5000)
