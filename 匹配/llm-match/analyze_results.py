@@ -20,6 +20,16 @@ LABEL_VALUES     = ["TP", "FP"]
 LLM_LABEL_VALUES = ["TP", "FP", "Unknown"]
 
 
+import re as _re
+
+
+def _strip_version(project_name_with_version: str) -> str:
+    """从 project_name_with_version 中去除末尾版本号，返回 project_name_without_version。
+    例如：'ffmpeg-6.1.1' -> 'ffmpeg', 'openssl-3.0.0' -> 'openssl'
+    """
+    return _re.sub(r'[-_]\d+(\.\d+)*$', '', project_name_with_version)
+
+
 def analyze_file(filepath: str) -> dict:
     """
     分析单个结果文件，返回统计数据及各分类条目列表。
@@ -45,11 +55,22 @@ def analyze_file(filepath: str) -> dict:
     cross_counts = defaultdict(lambda: defaultdict(int))
     cross_items  = defaultdict(lambda: defaultdict(list))
 
+    # 按 (tool_name, project_name_without_version, rule_id) 联合分组统计
+    # combo_counts[combo_key] = {"total": n, "llm_label": {"TP": n, "FP": n, "Unknown": n}}
+    combo_counts = defaultdict(lambda: defaultdict(int))
+
     for item in valid:
         lbl = item["label"]
         llm = item["llm_label"]
         cross_counts[lbl][llm] += 1
         cross_items[lbl][llm].append(item)
+
+        tool    = item.get("tool_name", "")
+        proj_nv = _strip_version(item.get("project_name_with_version", ""))
+        rule    = item.get("rule_id", "")
+        key     = (tool, proj_nv, rule)
+        combo_counts[key]["total"] += 1
+        combo_counts[key][llm]     += 1
 
     # 各 label 小计
     label_totals = {lbl: sum(cross_counts[lbl].values()) for lbl in LABEL_VALUES}
@@ -73,6 +94,21 @@ def analyze_file(filepath: str) -> dict:
                  if precision is not None and recall is not None
                  and (precision + recall) > 0 else None)
 
+    # 将 combo_counts 转换为可序列化的结构，并按 total 降序排列
+    # combo_stats: list of {"tool_name", "project_name_without_version", "rule_id", "total", "TP", "FP", "Unknown"}
+    combo_stats = []
+    for (tool, proj_nv, rule), counts in combo_counts.items():
+        combo_stats.append({
+            "tool_name":                    tool,
+            "project_name_without_version": proj_nv,
+            "rule_id":                      rule,
+            "total":                        counts["total"],
+            "TP":                           counts.get("TP", 0),
+            "FP":                           counts.get("FP", 0),
+            "Unknown":                      counts.get("Unknown", 0),
+        })
+    combo_stats.sort(key=lambda x: (-x["total"], x["tool_name"], x["project_name_without_version"], x["rule_id"]))
+
     return {
         "total":        total,
         "skipped":      skipped,
@@ -95,6 +131,9 @@ def analyze_file(filepath: str) -> dict:
         "fp_tp":        cross_items["FP"]["TP"],   # 算法=FP, LLM=TP  (误判)
         "tp_unknown":   cross_items["TP"]["Unknown"],
         "fp_unknown":   cross_items["FP"]["Unknown"],
+        # (tool_name, project_name_without_version, rule_id) 联合分组统计
+        "combo_stats":      combo_stats,
+        "n_combo_types":    len(combo_stats),
     }
 
 
@@ -280,6 +319,24 @@ def generate_markdown_report(filepath: str, stats: dict) -> str:
     ]
     lines += build_item_table(fp_unk)
 
+    # 6. (tool_name, project_name_without_version, rule_id) 联合分组统计
+    combo_stats  = stats["combo_stats"]
+    n_combo_types = stats["n_combo_types"]
+    lines += [
+        f"## 6. 按 (tool_name, project_name_without_version, rule_id) 联合分组统计",
+        "",
+        f"> 共 **{n_combo_types}** 种不同组合（种类），按条目数降序排列。",
+        "",
+        "| # | tool_name | project_name_without_version | rule_id | 总计 | TP | FP | Unknown |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    for idx, row in enumerate(combo_stats, 1):
+        lines.append(
+            f"| {idx} | {row['tool_name']} | {row['project_name_without_version']} "
+            f"| {row['rule_id']} | {row['total']} | {row['TP']} | {row['FP']} | {row['Unknown']} |"
+        )
+    lines.append("")
+
     # 尾注
     lines += [
         "---",
@@ -342,6 +399,7 @@ def main():
     print(f"  精确率(TP)  : {fmt_pct(stats['precision'])}")
     print(f"  召回率(TP)  : {fmt_pct(stats['recall'])}")
     print(f"  F1(TP)      : {fmt_pct(stats['f1'])}")
+    print(f"  联合分组种类: {stats['n_combo_types']}  (tool × project × rule_id)")
     print("─" * 50)
     print(f"\n✅ 报告已保存至：{output_path}")
 

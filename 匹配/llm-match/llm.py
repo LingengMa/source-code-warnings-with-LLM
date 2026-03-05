@@ -28,28 +28,28 @@ UNIFIED_INPUT = "input/slices_for_llm_with_label.json"
 
 MODES = {
     "with_unknown_without_label": {
-        "prompt_module": "prompt_with_unknown_without_label",
+        "prompt_module": "prompts.prompt_with_unknown_without_label",
         "input_file":    UNIFIED_INPUT,
         "output_file":   "output/results_with_unknown_without_label.json",
         "description":   "三分类(TP/FP/Unknown)，不含算法参考标签",
         "strip_label":   True,   # 发送给LLM前剔除 label 字段
     },
     "without_unknown_without_label": {
-        "prompt_module": "prompt_without_unknown_without_label",
+        "prompt_module": "prompts.prompt_without_unknown_without_label",
         "input_file":    UNIFIED_INPUT,
         "output_file":   "output/results_without_unknown_without_label.json",
         "description":   "二分类(TP/FP)，不含算法参考标签",
         "strip_label":   True,
     },
     "with_unknown_with_label": {
-        "prompt_module": "prompt_with_unknown_with_label",
+        "prompt_module": "prompts.prompt_with_unknown_with_label",
         "input_file":    UNIFIED_INPUT,
         "output_file":   "output/results_with_unknown_with_label.json",
         "description":   "三分类(TP/FP/Unknown)，含算法参考标签",
         "strip_label":   False,
     },
     "without_unknown_with_label": {
-        "prompt_module": "prompt_without_unknown_with_label",
+        "prompt_module": "prompts.prompt_without_unknown_with_label",
         "input_file":    UNIFIED_INPUT,
         "output_file":   "output/results_without_unknown_with_label.json",
         "description":   "二分类(TP/FP)，含算法参考标签",
@@ -164,7 +164,7 @@ def run(mode: str):
 
     processed_count = 0
 
-    with ThreadPoolExecutor(max_workers=4) as executor:
+    with ThreadPoolExecutor(max_workers=5) as executor:
         future_to_data = {
             executor.submit(process_data_with_llm, data_item, prompt_template, strip_label): data_item
             for data_item in tasks_to_process
@@ -185,15 +185,15 @@ def run(mode: str):
                 # 每处理10条数据保存一次
                 if processed_count % 10 == 0:
                     with open(output_filepath, 'w', encoding='utf-8') as f:
-                        json.dump(results, f, indent=2, ensure_ascii=False)
+                        json.dump(sorted(results, key=lambda x: x.get('id', 0)), f, indent=2, ensure_ascii=False)
                     print(f"--- 进度已保存：已处理 {processed_count}/{total_tasks} ---")
 
             except Exception as exc:
                 print(f"ID {data_item.get('id')} 在处理时产生异常: {exc}")
 
-    # 最终保存所有结果
+    # 最终保存所有结果（按 id 排序）
     with open(output_filepath, 'w', encoding='utf-8') as f:
-        json.dump(results, f, indent=2, ensure_ascii=False)
+        json.dump(sorted(results, key=lambda x: x.get('id', 0)), f, indent=2, ensure_ascii=False)
 
     print(f"\n处理完成！总共 {len(results)} 条结果已保存到 {output_filepath}")
 

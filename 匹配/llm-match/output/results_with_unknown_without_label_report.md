@@ -2,7 +2,7 @@
 
 - **分析文件**：`results_with_unknown_without_label.json`
 - **完整路径**：`/home/lg/Documents/projects/毕设/大仓/匹配/llm-match/output/results_with_unknown_without_label.json`
-- **生成时间**：2026-03-03 20:10:02
+- **生成时间**：2026-03-04 22:31:23
 
 ---
 
@@ -2589,6 +2589,56 @@
 | 2482 | tmux-3.2 | spawn_window | Dereference of null pointer | 185 | FP | Unknown | 切片代码中，在告警行 `w->name = default_window_name(w);` 之前，变量 `w` 的赋值路径不明确。存在 `w = NULL;` 和 `w = sc->wl->window;` 等不同分支，但无法确定在... |
 | 2503 | tmux-3.4 | mode_tree_get_tag | Dereference of null pointer | 309 | FP | Unknown | 切片代码中未包含变量 `i` 的声明和初始化，无法判断循环条件 `i < mtd->line_size` 是否会导致 `i` 超出 `mtd->line_list` 的有效索引范围，从而无法确认 `mtd->line_list[i].... |
 
+## 6. 按 (tool_name, project_name_without_version, rule_id) 联合分组统计
+
+> 共 **43** 种不同组合（种类），按条目数降序排列。
+
+| # | tool_name | project_name_without_version | rule_id | 总计 | TP | FP | Unknown |
+|---|---|---|---|---|---|---|---|
+| 1 | codeql | vim | cpp/unbounded-write | 751 | 641 | 106 | 4 |
+| 2 | csa | ffmpeg | Dereference of null pointer | 444 | 43 | 351 | 50 |
+| 3 | csa | git | Dereference of null pointer | 292 | 40 | 239 | 13 |
+| 4 | csa | redis | Dereference of null pointer | 209 | 11 | 176 | 22 |
+| 5 | codeql | git | cpp/inconsistent-null-check | 129 | 29 | 99 | 1 |
+| 6 | csa | musl | Dereference of null pointer | 98 | 14 | 84 | 0 |
+| 7 | codeql | vim | cpp/inconsistent-null-check | 83 | 14 | 64 | 5 |
+| 8 | codeql | git | cpp/overflow-buffer | 50 | 0 | 47 | 3 |
+| 9 | codeql | openssl-openssl | cpp/unterminated-variadic-call | 45 | 0 | 45 | 0 |
+| 10 | csa | tmux | Dereference of null pointer | 44 | 10 | 31 | 3 |
+| 11 | codeql | openssl-openssl | cpp/use-after-free | 40 | 2 | 37 | 1 |
+| 12 | codeql | ffmpeg | cpp/inconsistent-null-check | 35 | 11 | 24 | 0 |
+| 13 | codeql | ffmpeg | cpp/offset-use-before-range-check | 33 | 9 | 24 | 0 |
+| 14 | codeql | openssl-openssl | cpp/invalid-pointer-deref | 25 | 0 | 25 | 0 |
+| 15 | codeql | openssl-openssl | cpp/unbounded-write | 24 | 9 | 15 | 0 |
+| 16 | codeql | vim | cpp/overrunning-write | 21 | 21 | 0 | 0 |
+| 17 | codeql | vim | cpp/unsafe-strcat | 21 | 5 | 16 | 0 |
+| 18 | codeql | git | cpp/offset-use-before-range-check | 20 | 14 | 6 | 0 |
+| 19 | codeql | musl | cpp/unbounded-write | 20 | 9 | 11 | 0 |
+| 20 | codeql | openssl-openssl | cpp/inconsistent-null-check | 19 | 6 | 13 | 0 |
+| 21 | codeql | git | cpp/invalid-pointer-deref | 15 | 12 | 3 | 0 |
+| 22 | codeql | vim | cpp/invalid-pointer-deref | 10 | 9 | 1 | 0 |
+| 23 | codeql | vim | cpp/redundant-null-check-simple | 9 | 0 | 9 | 0 |
+| 24 | codeql | openssl-openssl | cpp/offset-use-before-range-check | 8 | 0 | 8 | 0 |
+| 25 | codeql | ffmpeg | cpp/unbounded-write | 5 | 4 | 1 | 0 |
+| 26 | codeql | git | cpp/no-space-for-terminator | 5 | 0 | 5 | 0 |
+| 27 | codeql | musl | cpp/suspicious-allocation-size | 5 | 0 | 5 | 0 |
+| 28 | codeql | musl | cpp/unsafe-strcat | 5 | 0 | 5 | 0 |
+| 29 | codeql | nginx | cpp/inconsistent-null-check | 5 | 0 | 5 | 0 |
+| 30 | codeql | openssl-openssl | cpp/unsafe-strcat | 5 | 5 | 0 | 0 |
+| 31 | codeql | vim | cpp/offset-use-before-range-check | 5 | 0 | 5 | 0 |
+| 32 | codeql | git | cpp/redundant-null-check-simple | 4 | 0 | 4 | 0 |
+| 33 | codeql | openssl-openssl | cpp/redundant-null-check-simple | 3 | 0 | 3 | 0 |
+| 34 | codeql | ffmpeg | cpp/overflow-buffer | 2 | 2 | 0 | 0 |
+| 35 | codeql | musl | cpp/offset-use-before-range-check | 2 | 2 | 0 | 0 |
+| 36 | codeql | tmux | cpp/overflow-buffer | 2 | 0 | 2 | 0 |
+| 37 | codeql | curl-8_11 | cpp/invalid-pointer-deref | 1 | 0 | 1 | 0 |
+| 38 | codeql | curl-8_13 | cpp/invalid-pointer-deref | 1 | 0 | 1 | 0 |
+| 39 | codeql | curl-8_15 | cpp/invalid-pointer-deref | 1 | 0 | 1 | 0 |
+| 40 | codeql | curl-8_7 | cpp/inconsistent-null-check | 1 | 0 | 1 | 0 |
+| 41 | codeql | curl-8_7 | cpp/invalid-pointer-deref | 1 | 0 | 1 | 0 |
+| 42 | codeql | curl-8_9 | cpp/inconsistent-null-check | 1 | 0 | 1 | 0 |
+| 43 | codeql | curl-8_9 | cpp/invalid-pointer-deref | 1 | 0 | 1 | 0 |
+
 ---
 
-*报告由 `analyze_results.py` 自动生成，生成时间：2026-03-03 20:10:02*
+*报告由 `analyze_results.py` 自动生成，生成时间：2026-03-04 22:31:23*
