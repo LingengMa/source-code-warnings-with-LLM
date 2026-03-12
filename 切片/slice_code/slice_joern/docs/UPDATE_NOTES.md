@@ -1,5 +1,53 @@
 # slice_joern_ultra 更新说明
 
+## 2026-03-01 更新：PDG 切片失败场景优化（语义切片回退）
+
+### 问题背景
+
+对于某些特殊文件（如含大量宏展开/内联汇编的 `snowdsp.c`），Joern 会将函数解析为 `<global>` 作用域，导致：
+1. `METHOD` 节点的 `LINE_NUMBER_END` 无法覆盖目标行
+2. `_find_pdg_for_line` 找不到对应的 PDG
+3. `SliceEngine` 得到空节点集
+4. 最终回退到「前后50行上下文截取」—— 包含大量无关代码，缺少关键变量定义和函数上下文
+
+### 改动内容
+
+#### `pdg_loader.py` — PDG 类新增方法
+
+- `has_node_at_line(target_line)`: 检查 PDG 中是否存在精确位于目标行的节点
+- `count_nodes_near_line(target_line, radius=200)`: 统计目标行附近节点数，用于宽松匹配打分
+
+#### `single_file_slicer.py` — 三段策略 PDG 查找
+
+`_find_pdg_for_line` 和 `process_single_task` 中的 PDG 查找均升级为三段策略：
+1. **精确范围匹配**：`METHOD.start_line ≤ target_line ≤ METHOD.end_line`（原有逻辑）
+2. **节点精确命中**：PDG 中存在行号 == target_line 的节点
+3. **宽松邻近匹配**：选取目标行 ±200 行内节点最多的 PDG（适用于 `<global>` 场景）
+
+#### `slice_engine.py` — 切片准则节点容错
+
+`SliceEngine.slice` 在目标行找不到节点时，自动在 ±3 行范围内搜索邻近节点作为切片准则，
+适应 Joern 对宏展开行的行号偏移场景。
+
+#### `code_extractor.py` — 新增 `ast_variable_slice` 函数
+
+当 PDG 切片仍然为空时（如 PDG 结构与目标行完全无关），使用 tree-sitter 做
+**基于变量使用的语义切片**：
+
+1. 解析函数代码的 AST，提取警告行上所有标识符（变量名）作为种子
+2. 迭代扩展：函数范围内所有「定义或使用了这些变量」的语句行均纳入切片
+3. 多轮传播（默认3轮），直到集合稳定
+4. 用 `ASTEnhancer` 补全语法括号，保证语法完整性
+
+#### `single_file_slicer.py` — 空切片回退策略升级
+
+原来：直接截取前后 N 行上下文
+
+现在：优先级从高到低：
+1. **PDG 切片**（正常路径）
+2. **AST 变量追踪切片**（PDG 为空时）：`slice_type = "ast_variable_slice"`
+3. **上下文截取**（AST 切片也失败时兜底）：`slice_type = "context_extraction"`
+
 ## 新增功能
 
 根据 `recover.md` 文档中描述的 Mystique 主项目流程，我已经为 `slice_joern_ultra` 项目添加了以下模块：
@@ -198,7 +246,6 @@ pip install tree-sitter tree-sitter-c
 运行测试脚本（需要先准备测试数据）：
 
 ```bash
-# 准备测试数据
 # 1. 在 slice_input/repository/ 下放置源代码
 # 2. 在 slice_input/data.json 中定义切片任务
 

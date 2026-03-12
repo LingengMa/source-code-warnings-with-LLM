@@ -226,12 +226,9 @@ def process_single_task(args):
     file_path = task.get('file_path', 'unknown')
     target_line = task.get('line_number', 0)
     
-    result = {
-        "project": project_name,
-        "file": file_path,
-        "line": target_line,
-        "status": "pending"
-    }
+    # 保留输入数据的所有字段
+    result = dict(task)  # 复制所有输入字段
+    result["status"] = "pending"
     
     temp_dir = None
     
@@ -259,6 +256,7 @@ def process_single_task(args):
         # 5. 查找包含目标行的 PDG
         file_name = os.path.basename(file_path)
         pdg = None
+        all_pdgs = []
         for pdg_file in os.listdir(pdg_dir):
             if not pdg_file.endswith('-pdg.dot'):
                 continue
@@ -266,12 +264,29 @@ def process_single_task(args):
             try:
                 temp_pdg = PDG(pdg_path)
                 if temp_pdg.filename and temp_pdg.filename.endswith(file_name):
+                    all_pdgs.append(temp_pdg)
                     if temp_pdg.start_line and temp_pdg.end_line:
                         if temp_pdg.start_line <= target_line <= temp_pdg.end_line:
                             pdg = temp_pdg
                             break
             except:
                 continue
+        
+        # 宽松匹配回退（与 _find_pdg_for_line 策略一致）
+        if not pdg and all_pdgs:
+            # 策略2：节点精确命中
+            for temp_pdg in all_pdgs:
+                if temp_pdg.has_node_at_line(target_line):
+                    pdg = temp_pdg
+                    break
+            # 策略3：邻近节点最多
+            if not pdg:
+                best_count = 0
+                for temp_pdg in all_pdgs:
+                    count = temp_pdg.count_nodes_near_line(target_line, radius=200)
+                    if count > best_count:
+                        best_count = count
+                        pdg = temp_pdg
         
         if not pdg:
             raise SingleFileSlicerException(f"No PDG found for line {target_line}")
@@ -282,7 +297,7 @@ def process_single_task(args):
         
         # 6. 执行切片
         engine = SliceEngine(pdg)
-        slice_nodes, metadata = engine.slice(target_line)
+        slice_nodes, metadata = engine.slice(target_line, rule_id=task.get('rule_id'))
         
         # 7. 提取切片行号
         slice_lines = {node.line_number for node in slice_nodes if node.line_number}
@@ -301,35 +316,102 @@ def process_single_task(args):
                     source_code=func_code,
                     slice_lines=slice_lines,
                     language=config.LANGUAGE,
-                    function_start_line=pdg.start_line or 1
+                    function_start_line=pdg.start_line or 1,
+                    target_line=target_line,
                 )
                 ast_enhanced_success = len(enhanced_lines) > len(slice_lines)
             except:
                 enhanced_lines = slice_lines
         
         # 9. 提取切片代码
-        from code_extractor import extract_code
+        from code_extractor import extract_code_with_functions
         source_line_dict = {i + 1: line for i, line in enumerate(code_lines)}
         
-        sliced_code = extract_code(
-            slice_lines=enhanced_lines,
-            source_lines=source_line_dict,
-            placeholder=None
-        )
+        # 检测"无效切片"：警告行不在切片内，或函数体为空（仅含函数签名/空括号）
+        def _is_trivial_slice(lines: Set[int], src: Dict[int, str], warn_line: int) -> bool:
+            """
+            判断切片是否对分析无价值：
+            1. 警告行不在切片行集合中；或
+            2. 切片覆盖的函数体内没有任何实质语句（空函数体）。
+            """
+            if warn_line not in lines:
+                return True
+            # 统计非空行（去掉空行、纯括号行、函数签名行）
+            meaningful = 0
+            for ln in lines:
+                content = src.get(ln, '').strip()
+                if content and content not in ('{', '}', '};') and not content.startswith('//'):
+                    meaningful += 1
+            # 少于 2 行实质内容视为无意义
+            return meaningful < 2
+
+        # 检测空切片或无效切片，优先使用 AST 变量追踪切片，最后才降级到上下文截取
+        slice_is_empty = not enhanced_lines or len(enhanced_lines) == 0
+        slice_is_trivial = (not slice_is_empty
+                            and _is_trivial_slice(enhanced_lines, source_line_dict, target_line))
+        if config.EMPTY_SLICE_FALLBACK and (slice_is_empty or slice_is_trivial):
+            fallback_reason = "empty_pdg_slice" if slice_is_empty else "trivial_slice_no_warning_line"
+            logging.warning(
+                f"{'Empty' if slice_is_empty else 'Trivial'} slice detected for "
+                f"{file_path}:{target_line} (reason={fallback_reason}), trying AST variable slice"
+            )
+            
+            ast_var_lines = set()
+            try:
+                from code_extractor import ast_variable_slice
+                ast_var_lines = ast_variable_slice(
+                    source_lines=source_line_dict,
+                    target_line=target_line,
+                    function_start_line=pdg.start_line or max(1, target_line - 100),
+                    function_end_line=pdg.end_line or min(len(code_lines), target_line + 100),
+                    language=config.LANGUAGE,
+                )
+            except Exception as e:
+                logging.warning(f"AST variable slice failed: {e}")
+            
+            if ast_var_lines:
+                enhanced_lines = ast_var_lines
+                metadata["slice_type"] = "ast_variable_slice"
+                metadata["extraction_reason"] = f"{fallback_reason}_ast_fallback"
+            else:
+                # 最终降级：提取上下文(前后N行)
+                start_line = max(1, target_line - config.CONTEXT_SIZE)
+                end_line = min(len(code_lines), target_line + config.CONTEXT_SIZE)
+                enhanced_lines = set(range(start_line, end_line + 1))
+                metadata["slice_type"] = "context_extraction"
+                metadata["context_size"] = config.CONTEXT_SIZE
+                metadata["extraction_reason"] = fallback_reason
+        else:
+            metadata["slice_type"] = "pdg_slice"
         
-        sliced_code_with_placeholder = extract_code(
+        # 使用增强的代码提取（包含函数调用定义）
+        extraction_result = extract_code_with_functions(
             slice_lines=enhanced_lines,
             source_lines=source_line_dict,
-            placeholder=config.PLACEHOLDER
+            warning_line=target_line,
+            function_start_line=pdg.start_line,
+            function_end_line=pdg.end_line,
+            placeholder=config.PLACEHOLDER,
+            extract_functions=config.EXTRACT_FUNCTION_CALLS,
+            project_root=os.path.join(config.REPOSITORY_DIR, project_name),
+            current_file_path=file_path
         )
         
         # 10. 构建结果
         result["status"] = "success"
+        result["function_name"] = pdg.method_name
+        result["sliced_code"] = extraction_result["sliced_code"]
         result["slice_lines"] = sorted(list(slice_lines))
         result["enhanced_slice_lines"] = sorted(list(enhanced_lines))
-        result["sliced_code"] = sliced_code
-        result["sliced_code_with_placeholder"] = sliced_code_with_placeholder
         result["metadata"] = metadata
+        
+        # 添加函数提取信息
+        if config.EXTRACT_FUNCTION_CALLS:
+            result["called_functions"] = sorted(list(extraction_result["called_functions"]))
+            result["function_definitions"] = extraction_result["function_definitions"]
+            result["complete_code"] = extraction_result["complete_code"]
+            metadata["called_functions_count"] = len(extraction_result["called_functions"])
+            metadata["extracted_functions_count"] = len(extraction_result["function_definitions"])
         
         metadata["original_slice_lines"] = len(slice_lines)
         metadata["enhanced_slice_lines"] = len(enhanced_lines)
@@ -387,32 +469,52 @@ class SingleFileSlicer:
     def _load_checkpoint(self) -> Dict:
         """加载断点信息"""
         if not config.ENABLE_CHECKPOINT:
-            return {"processed_indices": [], "chunk_count": 0}
+            return {"processed_ids": [], "chunk_count": 0}
         
         if os.path.exists(config.CHECKPOINT_FILE):
             try:
                 with open(config.CHECKPOINT_FILE, 'r', encoding='utf-8') as f:
                     checkpoint = json.load(f)
-                logging.info(f"Loaded checkpoint: {len(checkpoint.get('processed_indices', []))} tasks already processed")
+                # 兼容旧版本的 processed_indices
+                if "processed_indices" in checkpoint and "processed_ids" not in checkpoint:
+                    logging.warning("Converting old checkpoint format (indices) to new format (ids)")
+                    checkpoint["processed_ids"] = []
+                    checkpoint.pop("processed_indices", None)
+                logging.info(f"Loaded checkpoint: {len(checkpoint.get('processed_ids', []))} tasks already processed")
                 return checkpoint
             except Exception as e:
                 logging.warning(f"Failed to load checkpoint: {e}")
         
-        return {"processed_indices": [], "chunk_count": 0}
+        return {"processed_ids": [], "chunk_count": 0}
     
-    def _save_checkpoint(self, processed_index: int):
-        """保存断点信息"""
+    def _save_checkpoint(self, processed_id: int):
+        """保存断点信息 (使用任务id而非索引)
+        
+        注意: 只有在任务成功完成后才调用此方法，确保checkpoint记录的都是已完成的任务
+        """
         if not config.ENABLE_CHECKPOINT:
             return
         
-        self.checkpoint_data["processed_indices"].append(processed_index)
+        if processed_id not in self.checkpoint_data["processed_ids"]:
+            self.checkpoint_data["processed_ids"].append(processed_id)
         
         os.makedirs(config.OUTPUT_DIR, exist_ok=True)
+        
+        # 使用临时文件+原子重命名，防止写入过程中程序崩溃导致文件损坏
+        temp_file = config.CHECKPOINT_FILE + ".tmp"
         try:
-            with open(config.CHECKPOINT_FILE, 'w', encoding='utf-8') as f:
+            with open(temp_file, 'w', encoding='utf-8') as f:
                 json.dump(self.checkpoint_data, f, indent=2)
+            # 原子性重命名
+            os.replace(temp_file, config.CHECKPOINT_FILE)
         except Exception as e:
             logging.warning(f"Failed to save checkpoint: {e}")
+            # 清理临时文件
+            if os.path.exists(temp_file):
+                try:
+                    os.remove(temp_file)
+                except:
+                    pass
     
     def _save_chunk(self, chunk_results: List[Dict], chunk_index: int):
         """保存一个chunk的结果"""
@@ -451,15 +553,18 @@ class SingleFileSlicer:
         except Exception as e:
             logging.error(f"Failed to save chunk {chunk_index}: {e}")
     
-    def _save_progress(self, current_index: int, total: int, success: int, failed: int):
-        """保存处理进度"""
+    def _save_progress(self, current_id: int, total: int, processed_count: int, success: int, failed: int):
+        """保存处理进度 (使用任务id而非索引)
+        
+        进度文件会更频繁更新，用于监控当前状态
+        """
         progress = {
-            "current_index": current_index,
+            "current_id": current_id,
             "total_tasks": total,
-            "processed": current_index + 1,
+            "processed": processed_count,
             "success": success,
             "failed": failed,
-            "progress_percentage": ((current_index + 1) / total * 100) if total > 0 else 0,
+            "progress_percentage": (processed_count / total * 100) if total > 0 else 0,
             "timestamp": json.dumps(None)  # Will be replaced below
         }
         
@@ -467,11 +572,21 @@ class SingleFileSlicer:
         import datetime
         progress["timestamp"] = datetime.datetime.now().isoformat()
         
+        # 使用临时文件+原子重命名，防止写入过程中程序崩溃导致文件损坏
+        temp_file = config.PROGRESS_FILE + ".tmp"
         try:
-            with open(config.PROGRESS_FILE, 'w', encoding='utf-8') as f:
+            with open(temp_file, 'w', encoding='utf-8') as f:
                 json.dump(progress, f, indent=2, ensure_ascii=False)
+            # 原子性重命名
+            os.replace(temp_file, config.PROGRESS_FILE)
         except Exception as e:
             logging.warning(f"Failed to save progress: {e}")
+            # 清理临时文件
+            if os.path.exists(temp_file):
+                try:
+                    os.remove(temp_file)
+                except:
+                    pass
     
     def _load_source_file(self, project_version: str, file_path: str) -> Tuple[str, List[str]]:
         """
@@ -493,7 +608,15 @@ class SingleFileSlicer:
             raise SingleFileSlicerException(f"Failed to read {full_path}: {e}")
     
     def _find_pdg_for_line(self, pdg_dir: str, target_line: int, file_name: str) -> Optional[PDG]:
-        """在 PDG 目录中查找包含目标行的 PDG"""
+        """
+        在 PDG 目录中查找包含目标行的 PDG。
+        
+        查找策略（按优先级）：
+        1. 精确匹配：PDG 的 METHOD 节点行范围 [start_line, end_line] 包含目标行
+        2. 节点精确命中：PDG 中存在行号恰好等于目标行的节点
+        3. 宽松匹配：PDG 中目标行附近（±200行）节点最多的 PDG
+        """
+        all_pdgs = []
         
         for pdg_file in os.listdir(pdg_dir):
             if not pdg_file.endswith('-pdg.dot'):
@@ -507,13 +630,43 @@ class SingleFileSlicer:
                 if pdg.filename and not pdg.filename.endswith(file_name):
                     continue
                 
-                # 检查行号范围
+                all_pdgs.append(pdg)
+                
+                # 策略1：精确行范围匹配
                 if pdg.start_line and pdg.end_line:
                     if pdg.start_line <= target_line <= pdg.end_line:
+                        logging.info(f"PDG found via exact range match: {pdg}")
                         return pdg
             except Exception as e:
                 logging.debug(f"Failed to load {pdg_file}: {e}")
                 continue
+        
+        if not all_pdgs:
+            return None
+        
+        # 策略2：PDG 中存在精确在目标行的节点
+        for pdg in all_pdgs:
+            if pdg.has_node_at_line(target_line):
+                logging.info(f"PDG found via exact node-line match: {pdg}")
+                return pdg
+        
+        # 策略3：宽松匹配 —— 选择目标行附近节点最多的 PDG
+        # 适用于 Joern 将宏展开函数识别为 <global> 或行范围记录不准确的场景
+        best_pdg = None
+        best_count = 0
+        for pdg in all_pdgs:
+            count = pdg.count_nodes_near_line(target_line, radius=200)
+            if count > best_count:
+                best_count = count
+                best_pdg = pdg
+        
+        if best_pdg and best_count > 0:
+            logging.warning(
+                f"PDG found via relaxed match (nearest-nodes strategy): {best_pdg}, "
+                f"{best_count} nodes within ±200 lines of target line {target_line}. "
+                f"METHOD range: {best_pdg.start_line}-{best_pdg.end_line}"
+            )
+            return best_pdg
         
         return None
     
@@ -526,12 +679,9 @@ class SingleFileSlicer:
         logging.info("\n" + "=" * 60)
         logging.info(f"Processing: {project_name} - {file_path}:{target_line}")
         
-        result = {
-            "project": project_name,
-            "file": file_path,
-            "line": target_line,
-            "status": "pending"
-        }
+        # 保留输入数据的所有字段
+        result = dict(task)  # 复制所有输入字段
+        result["status"] = "pending"
         
         temp_dir = None
         
@@ -567,7 +717,7 @@ class SingleFileSlicer:
             
             # 6. 执行切片，获取节点集
             engine = SliceEngine(pdg)
-            slice_nodes, metadata = engine.slice(target_line)
+            slice_nodes, metadata = engine.slice(target_line, rule_id=task.get('rule_id'))
             
             logging.info(f"Slice engine returned {len(slice_nodes)} nodes.")
             
@@ -589,43 +739,86 @@ class SingleFileSlicer:
                         source_code=func_code,
                         slice_lines=slice_lines,
                         language=config.LANGUAGE,
-                        function_start_line=pdg.start_line or 1
+                        function_start_line=pdg.start_line or 1,
+                        target_line=target_line,
                     )
                     ast_enhanced_success = len(enhanced_lines) > len(slice_lines)
                     logging.info(f"AST enhancement: {len(slice_lines)} -> {len(enhanced_lines)} lines (added {len(enhanced_lines) - len(slice_lines)} lines)")
                 except Exception as e:
                     logging.warning(f"AST enhancement failed, using original slice: {e}")
-                    import traceback
-                    logging.debug(traceback.format_exc())
+                    import traceback as _tb
+                    logging.debug(_tb.format_exc())
                     enhanced_lines = slice_lines
             
             # 9. 提取切片代码
-            from code_extractor import extract_code
+            from code_extractor import extract_code_with_functions
             
             # 构建源代码行字典（1-based）
             source_line_dict = {i + 1: line for i, line in enumerate(code_lines)}
             
-            # 提取代码（无占位符）
-            sliced_code = extract_code(
-                slice_lines=enhanced_lines,
-                source_lines=source_line_dict,
-                placeholder=None
-            )
+            # 检测空切片，优先使用 AST 变量追踪切片，最后才降级到上下文截取
+            if not enhanced_lines or len(enhanced_lines) == 0:
+                logging.warning(f"Empty slice detected for {file_path}:{target_line}, trying AST variable slice")
+                
+                ast_var_lines: Set[int] = set()
+                try:
+                    from code_extractor import ast_variable_slice
+                    ast_var_lines = ast_variable_slice(
+                        source_lines=source_line_dict,
+                        target_line=target_line,
+                        function_start_line=pdg.start_line or max(1, target_line - 100),
+                        function_end_line=pdg.end_line or min(len(code_lines), target_line + 100),
+                        language=config.LANGUAGE,
+                    )
+                except Exception as e:
+                    logging.warning(f"AST variable slice failed: {e}")
+                
+                if ast_var_lines:
+                    enhanced_lines = ast_var_lines
+                    metadata["slice_type"] = "ast_variable_slice"
+                    metadata["extraction_reason"] = "empty_pdg_slice_ast_fallback"
+                    logging.info(f"AST variable slice succeeded: {len(enhanced_lines)} lines")
+                else:
+                    # 最终降级：提取上下文(前后N行)
+                    logging.warning(f"AST variable slice also failed, using context extraction fallback")
+                    context_size = 30
+                    start_line = max(1, target_line - context_size)
+                    end_line = min(len(code_lines), target_line + context_size)
+                    enhanced_lines = set(range(start_line, end_line + 1))
+                    metadata["slice_type"] = "context_extraction"
+                    metadata["context_size"] = context_size
+                    metadata["extraction_reason"] = "empty_pdg_slice"
+            else:
+                metadata["slice_type"] = "pdg_slice"
             
-            # 提取代码（带占位符）
-            sliced_code_with_placeholder = extract_code(
+            # 使用增强的代码提取（包含函数调用定义）
+            extraction_result = extract_code_with_functions(
                 slice_lines=enhanced_lines,
                 source_lines=source_line_dict,
-                placeholder=config.PLACEHOLDER
+                warning_line=target_line,
+                function_start_line=pdg.start_line,
+                function_end_line=pdg.end_line,
+                placeholder=config.PLACEHOLDER,
+                extract_functions=config.EXTRACT_FUNCTION_CALLS,
+                project_root=os.path.join(config.REPOSITORY_DIR, project_name),
+                current_file_path=file_path
             )
             
             # 10. 构建结果
             result["status"] = "success"
+            result["function_name"] = pdg.method_name
+            result["sliced_code"] = extraction_result["sliced_code"]
             result["slice_lines"] = sorted(list(slice_lines))
             result["enhanced_slice_lines"] = sorted(list(enhanced_lines))
-            result["sliced_code"] = sliced_code
-            result["sliced_code_with_placeholder"] = sliced_code_with_placeholder
             result["metadata"] = metadata
+            
+            # 添加函数提取信息
+            if config.EXTRACT_FUNCTION_CALLS:
+                result["called_functions"] = sorted(list(extraction_result["called_functions"]))
+                result["function_definitions"] = extraction_result["function_definitions"]
+                result["complete_code"] = extraction_result["complete_code"]
+                metadata["called_functions_count"] = len(extraction_result["called_functions"])
+                metadata["extracted_functions_count"] = len(extraction_result["function_definitions"])
             
             # 更新元数据
             metadata["original_slice_lines"] = len(slice_lines)
@@ -663,21 +856,30 @@ class SingleFileSlicer:
         chunk_results = []
         chunk_index = self.checkpoint_data.get("chunk_count", 0) + 1
         
-        processed_indices = set(self.checkpoint_data.get("processed_indices", []))
+        processed_ids = set(self.checkpoint_data.get("processed_ids", []))
         success_count = 0
         failed_count = 0
         
         logging.info(f"\nStarting batch slicing for {len(self.tasks)} tasks...")
-        if processed_indices:
-            logging.info(f"Resuming from checkpoint: {len(processed_indices)} tasks already processed")
+        if processed_ids:
+            logging.info(f"Resuming from checkpoint: {len(processed_ids)} tasks already processed")
         
         for i, task in enumerate(self.tasks):
-            # 跳过已处理的任务
-            if i in processed_indices:
-                logging.debug(f"Skipping already processed task {i+1}/{len(self.tasks)}")
+            task_id = task.get("id")
+            if task_id is None:
+                logging.warning(f"Task at index {i} has no 'id' field, skipping")
                 continue
             
-            logging.info(f"\n[{i+1}/{len(self.tasks)}] (Success: {success_count}, Failed: {failed_count})")
+            # 跳过已处理的任务
+            if task_id in processed_ids:
+                logging.debug(f"Skipping already processed task id={task_id} ({i+1}/{len(self.tasks)})")
+                continue
+            
+            logging.info(f"\n[{i+1}/{len(self.tasks)}] ID={task_id} (Success: {success_count}, Failed: {failed_count})")
+            
+            # 标记任务开始处理（在进度文件中记录，但不在checkpoint中）
+            processed_count = len(processed_ids) + success_count + failed_count
+            self._save_progress(task_id, len(self.tasks), processed_count, success_count, failed_count)
             
             # 执行切片
             result = self.slice_one(task)
@@ -691,11 +893,13 @@ class SingleFileSlicer:
             # 添加到当前chunk
             chunk_results.append(result)
             
-            # 保存断点
-            self._save_checkpoint(i)
+            # 只有任务完成后（无论成功或失败），才保存到checkpoint
+            # 这样如果程序在处理过程中崩溃，重启后会重新处理这个任务
+            self._save_checkpoint(task_id)
             
-            # 保存进度
-            self._save_progress(i, len(self.tasks), success_count, failed_count)
+            # 更新最终进度
+            processed_count = len(processed_ids) + success_count + failed_count
+            self._save_progress(task_id, len(self.tasks), processed_count, success_count, failed_count)
             
             # 如果当前chunk已满，保存并开始新chunk
             if len(chunk_results) >= config.CHUNK_SIZE:
@@ -732,19 +936,23 @@ class SingleFileSlicer:
         chunk_results = []
         chunk_index = self.checkpoint_data.get("chunk_count", 0) + 1
         
-        processed_indices = set(self.checkpoint_data.get("processed_indices", []))
+        processed_ids = set(self.checkpoint_data.get("processed_ids", []))
         success_count = 0
         failed_count = 0
         
         logging.info(f"\nStarting batch slicing with {config.NUM_PROCESSES} processes...")
         logging.info(f"Total tasks: {len(self.tasks)}")
-        if processed_indices:
-            logging.info(f"Resuming from checkpoint: {len(processed_indices)} tasks already processed")
+        if processed_ids:
+            logging.info(f"Resuming from checkpoint: {len(processed_ids)} tasks already processed")
         
         # 准备待处理的任务列表
         tasks_to_process = []
         for i, task in enumerate(self.tasks):
-            if i not in processed_indices:
+            task_id = task.get("id")
+            if task_id is None:
+                logging.warning(f"Task at index {i} has no 'id' field, skipping")
+                continue
+            if task_id not in processed_ids:
                 tasks_to_process.append((i, task, config.OUTPUT_DIR))
         
         if not tasks_to_process:
@@ -762,6 +970,10 @@ class SingleFileSlicer:
             with Pool(processes=config.NUM_PROCESSES) as pool:
                 # 使用 imap_unordered 获取结果,按完成顺序返回
                 for task_index, result in pool.imap_unordered(process_single_task, tasks_to_process):
+                    # 获取任务ID
+                    task = self.tasks[task_index]
+                    task_id = task.get("id")
+                    
                     processed_count += 1
                     
                     # 统计结果
@@ -774,11 +986,11 @@ class SingleFileSlicer:
                     chunk_results.append(result)
                     
                     # 保存断点
-                    self._save_checkpoint(task_index)
+                    self._save_checkpoint(task_id)
                     
                     # 保存进度
-                    total_processed = len(processed_indices) + processed_count
-                    self._save_progress(task_index, len(self.tasks), success_count, failed_count)
+                    total_processed = len(processed_ids) + processed_count
+                    self._save_progress(task_id, len(self.tasks), total_processed, success_count, failed_count)
                     
                     # 显示进度
                     elapsed = time.time() - start_time
@@ -787,7 +999,7 @@ class SingleFileSlicer:
                     eta = avg_time * remaining
                     
                     logging.info(
-                        f"[{total_processed}/{len(self.tasks)}] "
+                        f"[{total_processed}/{len(self.tasks)}] ID={task_id} "
                         f"Success: {success_count}, Failed: {failed_count}, "
                         f"Speed: {avg_time:.1f}s/task, ETA: {eta/3600:.1f}h"
                     )
@@ -832,7 +1044,7 @@ class SingleFileSlicer:
     
     def save_results(self, results: List[Dict]):
         """
-        合并所有chunk文件并保存最终结果
+        合并所有chunk文件并保存最终结果（按ID排序）
         注意：由于使用了分chunk保存，这个方法主要用于合并已有的chunk文件
         """
         os.makedirs(config.OUTPUT_DIR, exist_ok=True)
@@ -846,6 +1058,20 @@ class SingleFileSlicer:
             logging.warning("No results to save")
             return
         
+        # 按ID排序（如果有id字段）
+        results_with_id = [r for r in results if 'id' in r]
+        results_without_id = [r for r in results if 'id' not in r]
+        
+        if results_with_id:
+            results_with_id.sort(key=lambda x: x['id'])
+            logging.info(f"Sorted {len(results_with_id)} results by ID")
+        
+        if results_without_id:
+            logging.warning(f"Warning: {len(results_without_id)} results don't have 'id' field")
+        
+        # 合并：有id的在前（已排序），无id的在后
+        results = results_with_id + results_without_id
+        
         output_path = config.OUTPUT_JSON
         logging.info(f"\nSaving merged results to {output_path}")
         
@@ -858,11 +1084,12 @@ class SingleFileSlicer:
             logging.error(f"Failed to save results: {e}")
             return
         
-        # 保存简化版本
+        # 保存简化版本（也按ID排序）
         summary_path = output_path.replace('.json', '_summary.json')
         summary = []
         for r in results:
             summary_item = {
+                "id": r.get("id"),  # 添加id字段到summary
                 "project": r.get("project"),
                 "file": r.get("file"),
                 "line": r.get("line"),
@@ -880,9 +1107,54 @@ class SingleFileSlicer:
             json.dump(summary, f, indent=2, ensure_ascii=False)
         
         logging.info(f"✓ Summary saved to {summary_path}")
+        
+        # 生成LLM专用的精简版本（不含label）
+        llm_path = output_path.replace('.json', '_for_llm.json')
+        llm_results = []
+        for r in results:
+            llm_item = {
+                "id": r.get("id"),
+                "tool_name": r.get("tool_name"),
+                "project_name_with_version": r.get("project_name_with_version"),
+                "project_version": r.get("project_version"),
+                "line_number": r.get("line_number"),
+                "function_name": r.get("function_name"),
+                "rule_id": r.get("rule_id"),
+                "message": r.get("message"),
+                "sliced_code": r.get("complete_code") or r.get("sliced_code")
+            }
+            llm_results.append(llm_item)
+        
+        with open(llm_path, 'w', encoding='utf-8') as f:
+            json.dump(llm_results, f, indent=2, ensure_ascii=False)
+        
+        logging.info(f"✓ LLM format saved to {llm_path}")
+        
+        # 生成LLM专用的精简版本（含label）
+        llm_label_path = output_path.replace('.json', '_for_llm_with_label.json')
+        llm_label_results = []
+        for r in results:
+            llm_label_item = {
+                "id": r.get("id"),
+                "tool_name": r.get("tool_name"),
+                "project_name_with_version": r.get("project_name_with_version"),
+                "project_version": r.get("project_version"),
+                "line_number": r.get("line_number"),
+                "function_name": r.get("function_name"),
+                "rule_id": r.get("rule_id"),
+                "message": r.get("message"),
+                "sliced_code": r.get("complete_code") or r.get("sliced_code"),
+                "label": r.get("label")
+            }
+            llm_label_results.append(llm_label_item)
+        
+        with open(llm_label_path, 'w', encoding='utf-8') as f:
+            json.dump(llm_label_results, f, indent=2, ensure_ascii=False)
+        
+        logging.info(f"✓ LLM format with label saved to {llm_label_path}")
     
     def _load_all_chunks(self) -> List[Dict]:
-        """加载所有chunk文件并合并"""
+        """加载所有chunk文件并合并，按ID排序"""
         all_results = []
         chunk_files = sorted([f for f in os.listdir(config.OUTPUT_DIR) 
                              if f.startswith('slices_chunk_') and f.endswith('.json') 
@@ -900,17 +1172,71 @@ class SingleFileSlicer:
             except Exception as e:
                 logging.warning(f"  Failed to load {chunk_file}: {e}")
         
+        # 按任务ID排序
+        if all_results:
+            # 先检查所有结果是否都有id字段
+            results_with_id = [r for r in all_results if 'id' in r]
+            results_without_id = [r for r in all_results if 'id' not in r]
+            
+            if results_without_id:
+                logging.warning(f"Warning: {len(results_without_id)} results don't have 'id' field")
+            
+            # 对有id的结果按id排序
+            if results_with_id:
+                results_with_id.sort(key=lambda x: x['id'])
+                logging.info(f"✓ Sorted {len(results_with_id)} results by ID")
+            
+            # 合并：有id的在前（已排序），无id的在后
+            all_results = results_with_id + results_without_id
+        
         return all_results
     
-    def merge_chunks(self):
-        """合并所有chunk文件为最终结果文件"""
+    def merge_chunks(self, delete_chunks: bool = True):
+        """合并所有chunk文件为最终结果文件
+        
+        Args:
+            delete_chunks: 是否在合并后删除chunk文件（默认True）
+        """
         logging.info("\nMerging all chunk files...")
         results = self._load_all_chunks()
-        if results:
-            self.save_results(results)
-            logging.info(f"✓ Merged {len(results)} results from chunk files")
-        else:
+        
+        if not results:
             logging.warning("No chunk files found to merge")
+            return
+        
+        # 保存合并结果
+        self.save_results(results)
+        logging.info(f"✓ Merged {len(results)} results from chunk files")
+        
+        # 删除chunk文件
+        if delete_chunks:
+            self._delete_chunk_files()
+    
+    def _delete_chunk_files(self):
+        """删除所有chunk文件和对应的summary文件"""
+        logging.info("\nCleaning up chunk files...")
+        
+        # 查找所有chunk文件（包括主文件和summary文件）
+        chunk_files = [f for f in os.listdir(config.OUTPUT_DIR) 
+                      if f.startswith('slices_chunk_') and f.endswith('.json')]
+        
+        deleted_count = 0
+        failed_count = 0
+        
+        for chunk_file in chunk_files:
+            chunk_path = os.path.join(config.OUTPUT_DIR, chunk_file)
+            try:
+                os.remove(chunk_path)
+                deleted_count += 1
+                logging.debug(f"  Deleted: {chunk_file}")
+            except Exception as e:
+                failed_count += 1
+                logging.warning(f"  Failed to delete {chunk_file}: {e}")
+        
+        if deleted_count > 0:
+            logging.info(f"✓ Deleted {deleted_count} chunk files")
+        if failed_count > 0:
+            logging.warning(f"✗ Failed to delete {failed_count} chunk files")
     
     def get_progress_info(self) -> Dict:
         """获取处理进度信息"""
@@ -938,7 +1264,7 @@ class SingleFileSlicer:
             except Exception as e:
                 logging.warning(f"Failed to clear progress: {e}")
         
-        self.checkpoint_data = {"processed_indices": [], "chunk_count": 0}
+        self.checkpoint_data = {"processed_ids": [], "chunk_count": 0}
 
 
 def main():

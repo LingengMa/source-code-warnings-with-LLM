@@ -157,6 +157,27 @@ class PDG:
                     succs.append((PDGNode(succ_id, self.g.nodes[succ_id]), edge_label))
         return succs
     
+    def count_nodes_near_line(self, target_line: int, radius: int = 200) -> int:
+        """
+        统计与目标行距离在 radius 以内的节点数量，
+        用于在无法精确匹配行范围时评估 PDG 的相关性。
+        """
+        count = 0
+        for node_id in self.g.nodes():
+            node = PDGNode(node_id, self.g.nodes[node_id])
+            ln = node.line_number
+            if ln is not None and abs(ln - target_line) <= radius:
+                count += 1
+        return count
+
+    def has_node_at_line(self, target_line: int) -> bool:
+        """检查该 PDG 是否存在精确在目标行的节点"""
+        for node_id in self.g.nodes():
+            node = PDGNode(node_id, self.g.nodes[node_id])
+            if node.line_number == target_line:
+                return True
+        return False
+    
     def __repr__(self):
         return f"PDG({self.method_name}, {self.filename}, lines {self.start_line}-{self.end_line})"
 
@@ -211,6 +232,35 @@ class PDGLoader:
         
         logging.warning(f"No PDG found for {filename}:{line_number}")
         return None
+    
+    def best_pdg_for_line(self, filename: str, line_number: int) -> Optional[PDG]:
+        """
+        宽松 PDG 查找方法，
+        在无法精确匹配行范围时找到目标行附近节点最多的 PDG。
+        """
+        if filename not in self.pdgs:
+            logging.warning(f"No PDGs found for file: {filename}")
+            return None
+        
+        # 先尝试精确查找
+        pdg = self.find_pdg_for_line(filename, line_number)
+        if pdg:
+            return pdg
+        
+        # 宽松查找
+        max_count = 0
+        best_pdg = None
+        for pdg in self.pdgs[filename]:
+            if pdg.has_node_at_line(line_number):
+                return pdg
+            
+            # 统计与目标行相近的节点数量
+            count = pdg.count_nodes_near_line(line_number)
+            if count > max_count:
+                max_count = count
+                best_pdg = pdg
+        
+        return best_pdg
     
     def get_all_pdgs_for_file(self, filename: str) -> List[PDG]:
         """获取文件的所有 PDG"""
