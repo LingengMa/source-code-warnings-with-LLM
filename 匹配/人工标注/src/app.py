@@ -104,7 +104,8 @@ def annotate():
         if not wid or label not in ('TP', 'FP', 'Unknown'):
             return jsonify({'success': False, 'error': '参数错误'}), 400
         annotations = load_annotations()
-        annotations[wid] = {'label': label, 'timestamp': datetime.now().isoformat()}
+        reason = data.get('reason', '')
+        annotations[wid] = {'label': label, 'reason': reason, 'timestamp': datetime.now().isoformat()}
         save_annotations(annotations)
         return jsonify({'success': True})
     except Exception as e:
@@ -170,6 +171,7 @@ def export_data():
             wid = str(w['id'])
             if wid in annotations:
                 rec['manual_annotation'] = annotations[wid]['label']
+                rec['annotation_reason'] = annotations[wid].get('reason', '')
                 rec['annotation_timestamp'] = annotations[wid]['timestamp']
             else:
                 rec['manual_annotation'] = None

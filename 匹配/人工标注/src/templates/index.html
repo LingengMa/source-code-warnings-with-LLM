@@ -113,6 +113,22 @@
   .nav-btn:hover { background: #f8fafc; }
   #shortcut-hint { font-size: 11px; color: #94a3b8; margin-left: auto; }
 
+  /* ── 标注理由 ── */
+  #reason-row { width: 100%; margin-top: 10px; }
+  #reason-row label { font-size: 12px; color: #64748b; font-weight: 600; display: block; margin-bottom: 4px; }
+  #reason-input {
+    width: 100%; resize: vertical; border: 1px solid #e2e8f0; border-radius: 6px;
+    padding: 8px 10px; font-size: 13px; font-family: inherit; color: #374151;
+    background: #f8fafc; line-height: 1.5; min-height: 60px; transition: border-color 0.15s;
+  }
+  #reason-input:focus { outline: none; border-color: #3b82f6; background: #fff; }
+  .ann-reason-display {
+    font-size: 12px; color: #475569; margin-top: 6px; padding: 6px 10px;
+    background: #f1f5f9; border-radius: 5px; border-left: 3px solid #94a3b8;
+    display: none; white-space: pre-wrap; word-break: break-word; max-height: 80px; overflow-y: auto;
+  }
+  .ann-reason-display.visible { display: block; }
+
   /* ── 消息文本 ── */
   .message-text { font-size: 14px; color: #1e293b; line-height: 1.6; background: #f8fafc; padding: 12px; border-radius: 6px; }
 
@@ -331,6 +347,10 @@ function showWarning(idx) {
     <button class="nav-btn" onclick="nextWarning()">D 下一条 ▶</button>
     <button class="nav-btn" onclick="nextUnannotated()">N 下一个未标注</button>
     <span id="shortcut-hint">${idx + 1} / ${filtered.length}</span>
+    <div id="reason-row">
+      <label for="reason-input">标注理由（可选）</label>
+      <textarea id="reason-input" placeholder="填写标注理由，例如：代码存在明确的边界检查缺失，确认为真实漏洞…" rows="3"></textarea>
+    </div>
   </div>
 
   <!-- 基本信息 -->
@@ -370,6 +390,10 @@ function showWarning(idx) {
     ${codeHtml}
   </div>
   `;
+
+  // 填充已有的标注理由
+  const reasonInput = document.getElementById('reason-input');
+  if (reasonInput) reasonInput.value = ann ? (ann.reason || '') : '';
 }
 
 function renderCode(code, highlightLine) {
@@ -398,19 +422,21 @@ function renderFileCode(code, highlightLine) {
 
 // ── 标注操作 ──────────────────────────────────────────────
 async function annotate(wid, label) {
+  const reason = (document.getElementById('reason-input')?.value || '').trim();
   const res = await fetch('/api/annotate', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({id: wid, label})
+    body: JSON.stringify({id: wid, label, reason})
   });
   const json = await res.json();
   if (!json.success) { alert('标注失败: ' + json.error); return; }
 
   // 更新本地数据
+  const ann = {label, reason, timestamp: new Date().toISOString()};
   const w = warnings.find(x => x.id === wid);
-  if (w) w.manual_annotation = {label, timestamp: new Date().toISOString()};
+  if (w) w.manual_annotation = ann;
   const fw = filtered.find(x => x.id === wid);
-  if (fw) fw.manual_annotation = {label, timestamp: new Date().toISOString()};
+  if (fw) fw.manual_annotation = ann;
 
   renderList();
   refreshStats();
@@ -426,6 +452,9 @@ async function deleteAnnotation(wid) {
   if (w) w.manual_annotation = null;
   const fw = filtered.find(x => x.id === wid);
   if (fw) fw.manual_annotation = null;
+
+  const reasonInput = document.getElementById('reason-input');
+  if (reasonInput) reasonInput.value = '';
 
   renderList();
   showWarning(currentIdx);
@@ -495,7 +524,7 @@ function escAttr(s) { return String(s).replace(/'/g,"\\'"); }
 
 // ── 键盘快捷键 ────────────────────────────────────────────
 document.addEventListener('keydown', e => {
-  if (e.target.tagName === 'INPUT') return;
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
   const w = filtered[currentIdx];
   if (!w) return;
   switch(e.key.toLowerCase()) {
